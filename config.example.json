@@ -1,0 +1,32 @@
+{
+    "api_key": "",
+    "base_url": "https://api.deepseek.com",
+    "project_dir": "MyNovel_Data",
+    "chroma_db_path": "chroma_db",
+    "chunk_size": 500,
+    "overlap": 100,
+    "models": {
+        "writer": "deepseek-chat",
+        "architect": "deepseek-reasoner",
+        "editor": "deepseek-chat",
+        "reviewer": "deepseek-chat",
+        "timekeeper": "deepseek-chat",
+        "auditor": "deepseek-reasoner"
+    },
+    "temperatures": {
+        "writer": 1.3,
+        "architect": 1.0,
+        "editor": 0.7,
+        "reviewer": 0.5,
+        "timekeeper": 0.1,
+        "auditor": 1.0
+    },
+    "prompts": {
+        "writer_system": "你是一个网文作家，擅长热血、快节奏的风格。请根据大纲和上下文撰写正文。",
+        "architect_system": "你是一个剧情架构师。请根据【最近剧情回顾】确保逻辑连贯。请严格只返回一个JSON列表。",
+        "knowledge_filter_system": "你是一个助手。请从检索片段中筛选出有用的背景信息，忽略无关内容。",
+        "reviewer_system": "你是一个严厉的网文主编。请检查正文是否符合【世界观】和【人物设定】。输出Markdown报告。",
+        "timekeeper_system": "你是一个时间记录员。请分析正文，推算时间流逝，并提取关键剧情事件。请严格只返回JSON格式。",
+        "auditor_system": "你是一个世界观管理员。请对比【正文】和【现有数据】，提取状态变更和人际关系变化。请严格只返回JSON格式，不要包含Markdown标记。"
+    }
+}

@@ -1,0 +1,18 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 虚拟环境
+venv/
+.env
+
+# 用户数据 (小说内容、向量库、图片等)
+MyNovel_Data/
+chroma_db/
+
+# 配置文件 (含密钥，不提交)
+config.json
+
+# IDE 配置 (可选)
+.vscode/
+.idea/
