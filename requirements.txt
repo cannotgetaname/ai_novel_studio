@@ -73,7 +73,6 @@ overrides==7.7.0
 packaging==25.0
 pandas==2.3.3
 pillow==12.0.0
-pip==25.2
 posthog==5.4.0
 propcache==0.4.1
 protobuf==6.33.2
@@ -116,11 +115,12 @@ tornado==6.5.3
 tqdm==4.67.1
 typer==0.20.0
 typer-slim==0.20.0
-typing_extensions==4.15.0
 typing-inspection==0.4.2
+typing_extensions==4.15.0
 tzdata==2025.2
 urllib3==2.3.0
 uvicorn==0.38.0
+uvloop==0.22.1
 watchdog==6.0.0
 watchfiles==1.1.1
 websocket-client==1.9.0
