@@ -66,7 +66,7 @@
 
 ```bash
 # 1. 克隆项目
-git clone [https://github.com/connotgetaname/ai-novel-studio.git](https://github.com/cannotgetaname/ai-novel-studio.git)
+git clone https://github.com/cannotgetaname/ai_novel_studio.git
 cd ai-novel-studio
 
 # 2. 创建虚拟环境 (推荐)
