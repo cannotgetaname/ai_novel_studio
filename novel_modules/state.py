@@ -10,6 +10,7 @@ CFG = backend.CFG
 class AppState:
     def __init__(self):
         # 数据层
+        self.volumes = manager.load_volumes() # 【新增】加载分卷
         self.structure = manager.load_structure()
         self.settings = manager.load_settings()
         self.characters = manager.load_characters()
@@ -20,6 +21,12 @@ class AppState:
         self.current_chapter_idx = 0
         self.current_content = ""
         
+        # 【新增】UI状态：记录展开的分卷ID集合
+        self.expanded_volumes = set()
+        # 默认展开第一个分卷（如果有）
+        if self.volumes:
+            self.expanded_volumes.add(self.volumes[0]['id'])
+
         # 全局回调函数 (由 main.py 注入)
         self.refresh_sidebar = None
         self.refresh_total_word_count = None
@@ -27,7 +34,6 @@ class AppState:
     # 辅助：获取当前章节对象
     def get_current_chapter(self):
         if not self.structure: return None
-        # 越界保护
         if self.current_chapter_idx >= len(self.structure):
             self.current_chapter_idx = len(self.structure) - 1
         return self.structure[self.current_chapter_idx]
@@ -35,7 +41,7 @@ class AppState:
 # 单例实例
 app_state = AppState()
 
-# UI 引用字典 (用于跨模块访问组件)
+# UI 引用字典
 ui_refs = {
     'editor_title': None, 'editor_outline': None, 'editor_content': None,
     'char_container': None, 'item_container': None, 'loc_container': None,

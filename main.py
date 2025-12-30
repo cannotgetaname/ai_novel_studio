@@ -37,41 +37,85 @@ async def main_page():
             total = await run.io_bound(manager.get_total_word_count)
             ui_refs['total_count'].set_text(f"全书字数: {total:,}")
 
+    # 【核心修改】侧边栏刷新逻辑：增加编辑按钮
     def refresh_sidebar():
         if not ui_refs['chapter_list']: return
         ui_refs['chapter_list'].clear()
+        
         with ui_refs['chapter_list']:
-            for idx, chap in enumerate(app_state.structure):
-                color = 'primary' if idx == app_state.current_chapter_idx else 'grey-8'
-                icon = ' 📝' if chap.get('review_report') else ''
-                time_icon = ' ⏱️' if chap.get('time_info', {}).get('events') else ''
-                ui.button(f"{chap['id']}. {chap['title']}{icon}{time_icon}", on_click=lambda i=idx: writing.load_chapter(i)) \
-                    .props(f'flat color={color} align=left no-caps').classes('w-full text-left')
+            for vol in app_state.volumes:
+                vol_chapters = [c for c in app_state.structure if c.get('volume_id') == vol['id']]
+                is_expanded = vol['id'] in app_state.expanded_volumes
+                
+                with ui.expansion(f"{vol['title']} ({len(vol_chapters)}章)", icon='book', value=is_expanded) \
+                        .classes('w-full bg-blue-50 mb-1 border rounded shadow-sm') \
+                        .on_value_change(lambda e, v=vol['id']: (app_state.expanded_volumes.add(v) if e.value else app_state.expanded_volumes.discard(v))) as expansion:
+                    
+                    with ui.column().classes('w-full pl-0 gap-1 bg-white p-1'):
+                        for chap in vol_chapters:
+                            real_idx = app_state.structure.index(chap)
+                            color = 'purple' if real_idx == app_state.current_chapter_idx else 'grey-8'
+                            status_icon = ''
+                            if chap.get('review_report'): status_icon += '📝'
+                            if chap.get('time_info', {}).get('events'): status_icon += '⏱️'
+                            
+                            ui.button(f"{chap['id']}. {chap['title']} {status_icon}", 
+                                      on_click=lambda i=real_idx: writing.load_chapter(i)) \
+                                .props(f'flat color={color} align=left no-caps dense size=sm') \
+                                .classes('w-full text-left pl-4 hover:bg-grey-100')
+                        
+                        # 【新增】分卷操作栏：编辑、添加章节
+                        with ui.row().classes('w-full justify-end pr-2 pt-1 border-t border-dashed'):
+                            ui.button(icon='edit', on_click=lambda v=vol['id']: writing.rename_volume(v)) \
+                                .props('flat size=xs color=grey').tooltip('重命名分卷')
+                            
+                            ui.button(icon='add', on_click=lambda v=vol['id']: writing.add_chapter_to_volume(v)) \
+                                .props('flat size=xs color=green').tooltip('在此卷添加章节')
 
     # 3. 注册全局回调
     app_state.refresh_sidebar = refresh_sidebar
     app_state.refresh_total_word_count = refresh_total_word_count
 
     # 4. 布局
-    with ui.left_drawer(value=True).classes('bg-blue-50') as drawer:
+    with ui.left_drawer(value=True).classes('bg-blue-50 flex flex-col') as drawer:
         ui.label('📚 章节目录').classes('text-h6 q-mb-md')
-        with ui.card().classes('w-full q-mb-md bg-white p-2'):
+        
+        # 控制面板卡片
+        with ui.card().classes('w-full q-mb-sm bg-white p-2'):
             ui_refs['total_count'] = ui.label('全书字数: ---').classes('text-sm font-bold')
             with ui.row().classes('w-full'):
                 ui.button('🔄 刷新', on_click=lambda: refresh_total_word_count()).props('flat size=sm color=primary').classes('w-1/2')
                 ui.button('📤 导出', on_click=lambda: writing.export_novel()).props('flat size=sm color=grey').classes('w-1/2')
+            
+            # 全书梗概按钮
+            with ui.row().classes('w-full q-mt-sm'):
+                async def show_book_summary():
+                    settings = await run.io_bound(manager.load_settings)
+                    summary = settings.get('book_summary', '暂无总结，请先保存章节触发生成。')
+                    with ui.dialog() as d, ui.card().classes('w-1/2'):
+                        ui.label('📖 全书剧情总纲').classes('text-h6 font-bold')
+                        with ui.scroll_area().classes('h-64 border p-4 bg-grey-1 rounded'):
+                            ui.markdown(summary).classes('text-lg leading-relaxed')
+                        ui.button('关闭', on_click=d.close).props('flat')
+                    d.open()
+                ui.button('📖 全书梗概', on_click=show_book_summary).props('flat size=sm color=purple').classes('w-full')
 
-        with ui.scroll_area().classes('h-full'):
+        # 章节列表区域 (可滚动)
+        with ui.scroll_area().classes('w-full flex-grow'):
             ui_refs['chapter_list'] = ui.column().classes('w-full')
             refresh_sidebar()
         
-        with ui.row().classes('w-full q-mt-md'):
-            ui.button('➕ 新建', on_click=writing.add_new_chapter).props('flat color=green')
-            ui.button('🗑️ 删除', on_click=writing.delete_current_chapter).props('flat color=red')
+        # 底部功能按钮
+        ui.separator().classes('my-2')
+        with ui.grid(columns=2).classes('w-full gap-2 pb-2'):
+            ui.button('新建分卷', on_click=writing.add_new_volume).props('outline color=indigo size=sm icon=create_new_folder')
+            ui.button('删除分卷', on_click=writing.delete_volume_dialog).props('outline color=red size=sm icon=folder_delete')
+            ui.button('新建章节', on_click=writing.add_new_chapter_auto).props('color=green size=sm icon=note_add')
+            ui.button('删除章节', on_click=writing.delete_current_chapter).props('color=red size=sm icon=delete_forever')
 
     with ui.header().classes('bg-white text-black shadow-sm'):
         ui.button(on_click=lambda: drawer.toggle(), icon='menu').props('flat color=black')
-        ui.label('AI 网文工作站 (V14.2 模块化完整版)').classes('text-h6')
+        ui.label('AI 网文工作站 (V15.1 编辑优化版)').classes('text-h6')
 
     with ui.tabs().classes('w-full') as tabs:
         tab_write = ui.tab('写作')
@@ -96,7 +140,7 @@ async def main_page():
             with ui.tab_panels(set_tabs, value=t_world).classes('w-full flex-grow'):
                 with ui.tab_panel(t_world).classes('h-full p-4'):
                     with ui.column().classes('w-full h-full'):
-                        world_input = ui.textarea(value=app_state.settings['world_view']).classes('w-full flex-grow').props('borderless input-style="height: 100%"')
+                        ui.textarea(value=app_state.settings['world_view']).classes('w-full flex-grow').props('borderless input-style="height: 100%"')
                         ui.button('保存', on_click=lambda: run.io_bound(manager.save_settings, app_state.settings)).props('color=green w-full')
                 
                 with ui.tab_panel(t_char).classes('h-full p-2'):
@@ -109,7 +153,6 @@ async def main_page():
                             with ui.row():
                                 ui.button(icon='refresh', on_click=settings.refresh_char_ui).props('flat round dense')
                                 ui.button('添加人物', icon='add', on_click=lambda: settings.open_char_dialog()).props('size=sm color=blue')
-                        
                         with ui.element('div').classes('w-full').style('height: calc(100vh - 200px); position: relative;'):
                             with ui.scroll_area().classes('w-full h-full').bind_visibility_from(ui_refs['char_view_mode'], 'text', backward=lambda x: x == 'list'):
                                 ui_refs['char_container'] = ui.column().classes('w-full p-1')

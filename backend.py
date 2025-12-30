@@ -24,6 +24,7 @@ class NovelManager:
         self.item_file = os.path.join(self.root_dir, "items.json")
         self.loc_file = os.path.join(self.root_dir, "locations.json")
         self.structure_file = os.path.join(self.root_dir, "structure.json")
+        self.volume_file = os.path.join(self.root_dir, "volumes.json")
         self._init_fs()
 
     def _init_fs(self):
@@ -31,7 +32,7 @@ class NovelManager:
         
         if not os.path.exists(self.setting_file):
             with open(self.setting_file, 'w', encoding='utf-8') as f:
-                json.dump({"world_view": "", "characters": ""}, f, ensure_ascii=False, indent=4)
+                json.dump({"world_view": "", "characters": "", "book_summary": ""}, f, ensure_ascii=False, indent=4)
         
         if not os.path.exists(self.char_file):
             default_chars = [{
@@ -47,16 +48,34 @@ class NovelManager:
         if not os.path.exists(self.loc_file):
             with open(self.loc_file, 'w', encoding='utf-8') as f: json.dump([], f)
 
+        if not os.path.exists(self.volume_file):
+            default_vol = [{"id": "vol_default", "title": "正文卷", "order": 1}]
+            with open(self.volume_file, 'w', encoding='utf-8') as f:
+                json.dump(default_vol, f, ensure_ascii=False, indent=4)
+
         if not os.path.exists(self.structure_file):
-            default_structure = [{"id": 1, "title": "第一章", "outline": "开局。", "summary": "", "time_info": {"label": "故事开始", "duration": "0", "events": []}}]
+            default_structure = [{
+                "id": 1, 
+                "title": "第一章", 
+                "volume_id": "vol_default", 
+                "outline": "开局。", 
+                "summary": "", 
+                "time_info": {"label": "故事开始", "duration": "0", "events": []}
+            }]
             with open(self.structure_file, 'w', encoding='utf-8') as f:
                 json.dump(default_structure, f, ensure_ascii=False, indent=4)
 
     # --- 基础读写 ---
     def load_settings(self):
-        with open(self.setting_file, 'r', encoding='utf-8') as f: return json.load(f)
+        try:
+            with open(self.setting_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return {}
+
     def save_settings(self, data):
-        with open(self.setting_file, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
+        with open(self.setting_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
     
     def load_characters(self):
         try:
@@ -68,21 +87,41 @@ class NovelManager:
         except: return []
 
     def save_characters(self, data):
-        with open(self.char_file, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
+        with open(self.char_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
 
     def load_items(self):
         try:
-            with open(self.item_file, 'r', encoding='utf-8') as f: return json.load(f)
-        except: return []
+            with open(self.item_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return []
+
     def save_items(self, data):
-        with open(self.item_file, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
+        with open(self.item_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
 
     def load_locations(self):
         try:
-            with open(self.loc_file, 'r', encoding='utf-8') as f: return json.load(f)
-        except: return []
+            with open(self.loc_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return []
+
     def save_locations(self, data):
-        with open(self.loc_file, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
+        with open(self.loc_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+
+    def load_volumes(self):
+        try:
+            with open(self.volume_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return []
+
+    def save_volumes(self, data):
+        with open(self.volume_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
 
     def load_structure(self):
         try:
@@ -91,14 +130,18 @@ class NovelManager:
                 for chap in data:
                     if 'time_info' not in chap:
                         chap['time_info'] = {"label": "未知时间", "duration": "-", "events": []}
+                    if 'volume_id' not in chap:
+                        chap['volume_id'] = "vol_default"
                 return data
         except: return []
 
     def save_structure(self, data):
-        with open(self.structure_file, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False, indent=4)
+        with open(self.structure_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
     
     def save_chapter_content(self, chapter_id, content):
-        with open(os.path.join(self.chapters_dir, f"{chapter_id}.txt"), 'w', encoding='utf-8') as f: f.write(content)
+        with open(os.path.join(self.chapters_dir, f"{chapter_id}.txt"), 'w', encoding='utf-8') as f:
+            f.write(content)
     
     def load_chapter_content(self, chapter_id):
         path = os.path.join(self.chapters_dir, f"{chapter_id}.txt")
@@ -172,6 +215,35 @@ class NovelManager:
         filter_prompt = f"【本章大纲】{query}\n【检索片段】\n{context_block}\n【任务】筛选有用背景，忽略[SKIP-RECENT]，合并重复，输出简练背景。"
         filtered_context = sync_call_llm(filter_prompt, sys_prompt, task_type="editor")
         return filtered_context, debug_info
+    
+    def update_chapter_summary(self, chapter_id, content):
+        if len(content) < 100: return ""
+        sys_prompt = CFG['prompts'].get('summary_chapter_system', "请总结章节。")
+        prompt = f"请阅读以下小说章节，用 150 字以内的篇幅，高度概括本章发生的**核心剧情**、**关键转折**和**重要伏笔**。\n\n【正文】\n{content[:4000]}"
+        summary = sync_call_llm(prompt, sys_prompt, task_type="writer")
+        structure = self.load_structure()
+        for chap in structure:
+            if chap['id'] == chapter_id:
+                chap['summary'] = summary
+                break
+        self.save_structure(structure)
+        return summary
+
+    def update_global_summary(self):
+        structure = self.load_structure()
+        all_summaries = []
+        for chap in structure:
+            if chap.get('summary'):
+                all_summaries.append(f"第{chap['id']}章: {chap['summary']}")
+        if not all_summaries: return "暂无剧情。"
+        combined_text = "\n".join(all_summaries)
+        sys_prompt = CFG['prompts'].get('summary_book_system', "请总结全书。")
+        prompt = f"以下是这就本小说目前的**分章剧情摘要**：\n{combined_text}\n【任务】请根据以上分章摘要，写一份**全书目前的剧情总纲**（500字左右）。"
+        global_summary = sync_call_llm(prompt, sys_prompt, task_type="architect")
+        settings = self.load_settings()
+        settings['book_summary'] = global_summary
+        self.save_settings(settings)
+        return global_summary
 
 # ================= 向量库管理器 (RAG) =================
 class MemoryManager:
@@ -184,8 +256,8 @@ class MemoryManager:
 
     def add_chapter_memory(self, chapter_id, content):
         self.delete_chapter_memory(chapter_id)
-        chunk_size = 500
-        step = 400
+        chunk_size = CFG.get('chunk_size', 500)
+        step = chunk_size - CFG.get('overlap', 100)
         chunks = [content[i:i+chunk_size] for i in range(0, len(content), step) if len(content[i:i+chunk_size]) > 50]
         if not chunks: return
         ids = [f"ch_{chapter_id}_{i}" for i in range(len(chunks))]
@@ -251,7 +323,6 @@ def sync_review_chapter(content, context_str):
     temperature = CFG['temperatures'].get(task_type, 0.5)
     sys_prompt = CFG['prompts'].get('reviewer_system', "你是一个严厉的编辑。")
     prompt = f"【待审查正文】\n{content}\n【参考设定】\n{context_str}\n【任务】审查逻辑一致性、剧情节奏、文笔。输出Markdown报告。"
-    print(f"\n[LLM Router] 任务: Review | 模型: {model_name}")
     try:
         response = client.chat.completions.create(
             model=model_name,
@@ -268,7 +339,6 @@ def sync_analyze_time(content, prev_time_label):
     temperature = CFG['temperatures'].get(task_type, 0.1)
     sys_prompt = CFG['prompts'].get('timekeeper_system', "你是一个时间记录员。")
     prompt = f"【上一章时间】{prev_time_label}\n【本章正文】{content[:3000]}...\n【任务】1.分析时间流逝 2.推算当前时间 3.提取事件\n【输出格式】严格JSON: {{\"label\": \"...\", \"duration\": \"...\", \"events\": [\"...\"]}}"
-    print(f"\n[LLM Router] 任务: Timekeeper | 模型: {model_name}")
     try:
         response = client.chat.completions.create(
             model=model_name,
@@ -279,41 +349,12 @@ def sync_analyze_time(content, prev_time_label):
         return response.choices[0].message.content
     except Exception as e: return f"Error: {str(e)}"
 
-# 【V13 新增】状态分析接口 (支持关系提取)
 def sync_analyze_state(content, current_data_summary):
     task_type = "auditor"
-    model_name = CFG['models'].get(task_type, "deepseek-reasoner") # 使用 R1
-    temperature = CFG['temperatures'].get(task_type, 1.0) # R1 建议默认温度
+    model_name = CFG['models'].get(task_type, "deepseek-reasoner")
+    temperature = CFG['temperatures'].get(task_type, 1.0)
     sys_prompt = CFG['prompts'].get('auditor_system', "你是一个世界观管理员。")
-    
-    prompt = f"""
-    【当前正文】
-    {content[:4000]}...
-    
-    【现有数据库摘要】
-    {current_data_summary}
-    
-    【任务】
-    请分析正文，检测以下变化：
-    1. **人物状态变更**：等级、状态(受伤/死亡)、所属势力。
-    2. **物品变更**：持有者转移、物品状态变化、新物品获得。
-    3. **新实体**：是否出现了**重要**的新人物、新物品或新地点？
-    4. **人际关系变更**：提取新关系（如拜师、结仇）或关系变化。
-    
-    【输出格式】
-    严格 JSON 格式，字段如下：
-    {{
-        "char_updates": [{{"name": "...", "field": "...", "new_value": "...", "reason": "..."}}],
-        "item_updates": [{{"name": "...", "field": "...", "new_value": "..."}}],
-        "new_chars": [{{"name": "...", "gender": "...", "role": "...", "status": "...", "bio": "..."}}],
-        "new_items": [{{"name": "...", "type": "...", "owner": "...", "desc": "..."}}],
-        "new_locs": [{{"name": "...", "faction": "...", "desc": "..."}}],
-        "relation_updates": [
-            {{"source": "主动方", "target": "被动方", "type": "关系类型", "desc": "说明"}}
-        ]
-    }}
-    """
-    print(f"\n[LLM Router] 任务: State Auditor | 模型: {model_name}")
+    prompt = f"【当前正文】\n{content[:4000]}...\n【现有数据库摘要】\n{current_data_summary}\n【任务】提取状态变更、物品变更、新实体、关系变更。请严格返回 JSON。"
     try:
         response = client.chat.completions.create(
             model=model_name,
@@ -324,11 +365,8 @@ def sync_analyze_state(content, current_data_summary):
         return response.choices[0].message.content
     except Exception as e: return f"Error: {str(e)}"
 
-# 【V13 新增】应用变更 (支持关系更新)
 def apply_state_changes(novel_manager, changes):
     logs = []
-    
-    # 1. 更新人物
     chars = novel_manager.load_characters()
     for update in changes.get('char_updates', []):
         for char in chars:
@@ -342,12 +380,9 @@ def apply_state_changes(novel_manager, changes):
             chars.append(new_char)
             logs.append(f"新增人物: {new_char['name']}")
             
-    # 4. 更新关系 (新增逻辑)
     for rel in changes.get('relation_updates', []):
-        # 找到源人物
         source_char = next((c for c in chars if c['name'] == rel['source']), None)
         if source_char:
-            # 检查关系是否存在
             existing_rel = next((r for r in source_char['relations'] if r['target'] == rel['target']), None)
             if existing_rel:
                 existing_rel['type'] = rel['type']
@@ -358,7 +393,6 @@ def apply_state_changes(novel_manager, changes):
     
     novel_manager.save_characters(chars)
 
-    # 2. 更新物品
     items = novel_manager.load_items()
     for update in changes.get('item_updates', []):
         for item in items:
@@ -371,7 +405,6 @@ def apply_state_changes(novel_manager, changes):
             logs.append(f"新增物品: {new_item['name']}")
     novel_manager.save_items(items)
 
-    # 3. 更新地点
     locs = novel_manager.load_locations()
     for new_loc in changes.get('new_locs', []):
         if not any(l['name'] == new_loc['name'] for l in locs):
