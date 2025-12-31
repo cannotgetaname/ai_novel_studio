@@ -64,7 +64,7 @@
 推荐使用 Python 3.10 或更高版本。
 我用的3.12.2
 
-```bash
+```
 # 1. 克隆项目
 git clone https://github.com/cannotgetaname/ai_novel_studio.git
 cd ai-novel-studio
@@ -77,11 +77,12 @@ python -m venv venv
 source venv/bin/activate
 
 # 3. 安装依赖
-pip install nicegui chromadb openai
+pip install nicegui chromadb openai```
+
 2. 配置文件
 在项目根目录创建 config.json 文件（可复制 config.example.json），并填入你的 API Key。
 
-JSON
+```
 
 {
     "api_key": "sk-your-deepseek-api-key",
@@ -97,7 +98,7 @@ JSON
     }
 }
 3. 运行系统
-Bash
+
 
 python main.py
 终端显示 NiceGUI ready 后，浏览器会自动打开 http://localhost:8080。
