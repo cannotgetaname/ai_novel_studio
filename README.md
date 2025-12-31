@@ -64,47 +64,85 @@
 推荐使用 Python 3.10 或更高版本。
 我用的3.12.2
 
-```
-# 1. 克隆项目
+
+#### 1. 克隆项目
+```bash
 git clone https://github.com/cannotgetaname/ai_novel_studio.git
 cd ai-novel-studio
-
-# 2. 创建虚拟环境 (推荐)
+```
+#### 2. 创建虚拟环境 (推荐)
+```bash
 python -m venv venv
 # Windows:
 .\venv\Scripts\activate
 # Linux/Mac:
 source venv/bin/activate
-
-# 3. 安装依赖
+```
+#### 3. 安装依赖
+```bash
 pip install nicegui chromadb openai```
-
-2. 配置文件
+```
+#### 4. 配置文件
 在项目根目录创建 config.json 文件（可复制 config.example.json），并填入你的 API Key。
 
-```
+
+
+```json
 
 {
-    "api_key": "sk-your-deepseek-api-key",
-    "base_url": "[https://api.deepseek.com](https://api.deepseek.com)",
+    "api_key": "YOUR_API_KEY",
+    "base_url": "https://api.deepseek.com",
     "project_dir": "MyNovel_Data",
+    "chroma_db_path": "chroma_db",
+    "chunk_size": 500,
+    "overlap": 100,
     "models": {
         "writer": "deepseek-chat",
         "architect": "deepseek-reasoner",
-        "auditor": "deepseek-reasoner"
+        "editor": "deepseek-chat",
+        "reviewer": "deepseek-chat",
+        "timekeeper": "deepseek-chat",
+        "auditor": "deepseek-reasoner",
+        "summary": "deepseek-chat"
+    },
+    "temperatures": {
+        "writer": 1.5,
+        "architect": 1.0,
+        "editor": 0.7,
+        "reviewer": 0.5,
+        "timekeeper": 0.1,
+        "auditor": 0.6,
+        "summary": 0.5
     },
     "prompts": {
-        "writer_system": "你是一个网文大神..."
+        "writer_system": "你是一个顶级网文作家，擅长热血、快节奏、爽点密集的风格。写作要求：\n1. 【黄金法则】多用“展示”而非“讲述”（Show, don't tell）。\n2. 【对话驱动】通过对话推动剧情和塑造性格，拒绝大段枯燥的心理描写。\n3. 【感官描写】调动视觉、听觉、触觉，增加代入感。\n4. 【节奏把控】详略得当，战斗场面要干脆利落，日常互动要有趣味。\n请根据提供的大纲、世界观和上下文，撰写引人入胜的正文。",
+        
+        "architect_system": "你是一个精通起承转合的剧情架构师。你的任务是基于前文和伏笔，规划后续章节。要求：\n1. 【逻辑严密】后续剧情必须符合人物性格逻辑，不能机械降神。\n2. 【冲突制造】每一章都必须有一个核心冲突或悬念钩子。\n3. 【伏笔回收】尝试利用历史记忆中的伏笔。\n请严格只返回一个标准的 JSON 列表，不要包含 Markdown 标记或其他废话。",
+        
+        "knowledge_filter_system": "你是一个专业的资料整理助手。你的任务是从检索到的碎片信息中，剔除无关噪音，筛选出对当前章节写作真正有帮助的背景信息（如人物之前的恩怨、物品的特殊设定、地点的具体样貌）。如果片段与当前剧情无关，请忽略。",
+        
+        "reviewer_system": "你是一个以毒舌著称的严厉网文主编。请从以下维度审查正文：\n1. 【人设一致性】人物言行是否符合其性格和身份？\n2. 【剧情逻辑】是否有前后矛盾或不合理的转折？\n3. 【爽点节奏】是否过于拖沓？是否有期待感？\n请输出一份 Markdown 格式的报告，不仅要指出问题，还要给出具体的修改建议。",
+        
+        "timekeeper_system": "你是一个精确的时间记录员。你的任务是分析正文，推算时间流逝。输出必须是严格的 JSON 格式：{\"label\": \"当前时间点(如：修仙历10年春)\", \"duration\": \"本章经过的时间(如：3天)\", \"events\": [\"事件1\", \"事件2\"]}。请只输出 JSON。",
+        
+        "auditor_system": "你是一个世界观数据库管理员。你的任务是分析小说正文，提取状态变更。你需要敏锐地捕捉隐性信息（例如：'他断了一臂' -> 状态: 重伤/残疾）。\n\n请严格按以下 JSON 结构输出（不要使用 Markdown 代码块）：\n{\n  \"char_updates\": [{\"name\": \"名字\", \"field\": \"属性名\", \"new_value\": \"新值\"}],\n  \"item_updates\": [{\"name\": \"物品名\", \"field\": \"属性名\", \"new_value\": \"新值\"}],\n  \"new_chars\": [{\"name\": \"名字\", \"gender\": \"性别\", \"role\": \"角色类型\", \"status\": \"状态\", \"bio\": \"简介\"}],\n  \"new_items\": [{\"name\": \"物品名\", \"type\": \"类型\", \"owner\": \"持有者\", \"desc\": \"描述\"}],\n  \"new_locs\": [{\"name\": \"地名\", \"faction\": \"所属势力\", \"desc\": \"描述\"}],\n  \"relation_updates\": [{\"source\": \"主角\", \"target\": \"配角\", \"type\": \"关系类型\"}]\n}",
+        
+        "summary_chapter_system": "你是一个专业的网文编辑，擅长提炼剧情精华。请将给定的小说章节压缩成 150 字以内的摘要。要求：\n1. 保留核心冲突和结果。\n2. 记录关键道具或人物的获得/损失。\n3. 记录重要的伏笔。\n不要写流水账，要写干货。",
+        
+        "summary_book_system": "你是一个资深主编，拥有宏观的上帝视角。请根据各章节的摘要，梳理出整本书目前的剧情脉络（Story Arc）。要求：\n1. 串联主要故事线，忽略支线细枝末节。\n2. 明确主角目前的处境、目标和成长阶段。\n3. 篇幅控制在 500 字左右，适合快速回顾。"
     }
 }
+```
+
 3. 运行系统
 
-
+```bash
 python main.py
+```
 终端显示 NiceGUI ready 后，浏览器会自动打开 http://localhost:8080。
 
-📖 使用指南
-侧边栏 (目录管理)：
+## 📖 使用指南
+### 侧边栏 (目录管理)：
 
 点击 “新建分卷” 创建你的第一卷。
 
@@ -112,7 +150,7 @@ python main.py
 
 点击 “📖 全书梗概” 查看 AI 自动生成的剧情总纲。
 
-写作 Tab：
+### 写作 Tab：
 
 输入标题和大纲，点击 “🚀 生成”。
 
@@ -120,15 +158,15 @@ python main.py
 
 点击 “💾 保存”，后台会自动更新剧情摘要。
 
-设定 Tab：
+### 设定 Tab：
 
 管理人物、物品、地点。支持列表模式和图谱模式切换。
 
-架构师 Tab：
+### 架构师 Tab：
 
 输入“后续剧情走向”，让 AI 基于全书伏笔为你规划未来 10 章的大纲。
 
-🤝 贡献与协议
+## 🤝 贡献与协议
 欢迎提交 Issue 或 Pull Request！ 本项目遵循 MIT 开源协议。
 
 Made with ❤️ by AI Novel Studio Team
