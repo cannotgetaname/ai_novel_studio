@@ -65,12 +65,12 @@
 我用的3.12.2
 
 
-#### 1. 克隆项目
+#### 克隆项目
 ```bash
 git clone https://github.com/cannotgetaname/ai_novel_studio.git
 cd ai-novel-studio
 ```
-#### 2. 创建虚拟环境 (推荐)
+#### 创建虚拟环境 (推荐)
 ```bash
 python -m venv venv
 # Windows:
@@ -78,11 +78,11 @@ python -m venv venv
 # Linux/Mac:
 source venv/bin/activate
 ```
-#### 3. 安装依赖
+#### 安装依赖
 ```bash
 pip install nicegui chromadb openai```
 ```
-#### 4. 配置文件
+### 2. 配置文件
 在项目根目录创建 config.json 文件（可复制 config.example.json），并填入你的 API Key。
 
 
@@ -134,7 +134,7 @@ pip install nicegui chromadb openai```
 }
 ```
 
-3. 运行系统
+### 3. 运行
 
 ```bash
 python main.py
