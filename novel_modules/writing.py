@@ -287,40 +287,131 @@ async def save_current_chapter():
     if app_state.refresh_total_word_count: await app_state.refresh_total_word_count()
 
 async def generate_content():
+    # 1. 获取基本信息
     chapter = app_state.get_current_chapter()
+    if not chapter: return
+    
     title = ui_refs['editor_title'].value
     outline = ui_refs['editor_outline'].value
     
+    # 自动切换到上下文 Tab，方便用户看到检索过程
     if ui_refs['right_tabs']: ui_refs['right_tabs'].set_value(ui_refs['tab_ctx'])
-    ui.notify(f'正在执行智能检索...', type='info')
+    ui.notify(f'正在构建多维记忆...', type='info')
     
+    # ---------------------------------------------------------
+    # 2. 🧠 Vector RAG (向量检索)：找历史剧情片段
+    # ---------------------------------------------------------
     query = f"{title} {outline}"
     if len(query) < 5: query = f"{title} {app_state.settings['world_view'][:50]}"
     
+    # 从 ChromaDB 检索相关切片
     filtered_context, debug_info = await run.io_bound(manager.smart_rag_pipeline, query, chapter['id'], memory)
-    context_text = f"{title} {outline}"
-    char_prompt_str, active_names = manager.get_relevant_context(context_text)
     
-    if active_names: ui.notify(f"已激活: {', '.join(active_names)}", type='positive')
+    # 从 JSON 设定集中获取相关人物 Bio
+    context_text_for_chars = f"{title} {outline}"
+    char_prompt_str, active_names = manager.get_relevant_context(context_text_for_chars)
     
+    # ---------------------------------------------------------
+    # 3. 🕸️ Graph RAG (图谱检索)：找逻辑关系
+    # ---------------------------------------------------------
+    graph_context = ""
+    active_graph_entities = []
+    
+    try:
+        # 3.1 实例化图引擎并从当前 JSON 状态构建图谱
+        # (这是一个轻量级操作，几百个节点毫秒级完成)
+        world_graph = backend.WorldGraph(manager)
+        await run.io_bound(world_graph.rebuild)
+        
+        # 3.2 提取当前大纲中的实体 (关键词匹配)
+        full_text_to_scan = f"{title}\n{outline}"
+        
+        # 扫描人物
+        for c in app_state.characters:
+            if c['name'] in full_text_to_scan: active_graph_entities.append(c['name'])
+        # 扫描地点
+        for l in app_state.locations:
+            if l['name'] in full_text_to_scan: active_graph_entities.append(l['name'])
+        # 扫描物品
+        for i in app_state.items:
+            if i['name'] in full_text_to_scan: active_graph_entities.append(i['name'])
+        
+        # 去重
+        active_graph_entities = list(set(active_graph_entities))
+        
+        # 3.3 检索图谱关系 (1跳邻居)
+        if active_graph_entities:
+            ui.notify(f"图谱激活: {', '.join(active_graph_entities)}", type='info')
+            for entity in active_graph_entities:
+                info = world_graph.get_context_text(entity, hops=1)
+                if info: 
+                    graph_context += f"【{entity} 的社交/物品关系】\n{info}\n"
+    except Exception as e:
+        print(f"GraphRAG Error: {e}")
+        graph_context = "(图谱构建失败，跳过)"
+
+    # ---------------------------------------------------------
+    # 4. 更新 Debug 面板 (让用户看到 AI 拿到了什么)
+    # ---------------------------------------------------------
     if ui_refs['rag_debug']:
         ui_refs['rag_debug'].clear()
         with ui_refs['rag_debug']:
-            ui.label("🧩 激活数据:").classes('font-bold text-sm')
-            ui.label(f"{', '.join(active_names) if active_names else '无'}").classes('text-sm text-blue-600 mb-2')
-            ui.label("🧠 智能清洗后的记忆:").classes('font-bold text-sm')
-            ui.label(filtered_context).classes('text-sm text-green-800 bg-green-50 p-2 rounded mb-2')
+            ui.label("🧠 向量记忆 (历史剧情):").classes('font-bold text-sm text-blue-800')
+            ui.label(filtered_context[:300] + "...").classes('text-xs text-grey-600 bg-blue-50 p-2 rounded mb-2')
+            
+            ui.label("🕸️ 图谱记忆 (逻辑关系):").classes('font-bold text-sm text-purple-800')
+            if graph_context:
+                ui.label(graph_context).classes('text-xs text-purple-900 bg-purple-50 p-2 rounded mb-2 whitespace-pre-wrap')
+            else:
+                ui.label("无活跃关系").classes('text-xs text-grey-400 italic mb-2')
+                
+            ui.label("👤 激活设定 (人物卡):").classes('font-bold text-sm text-green-800')
+            ui.label(char_prompt_str[:300] + "...").classes('text-xs text-green-800 bg-green-50 p-2 rounded')
 
+    # ---------------------------------------------------------
+    # 5. 组装 Prompt 并调用 LLM
+    # ---------------------------------------------------------
     book_summary = app_state.settings.get('book_summary', '（暂无全书总结）')
-    prompt = f"【世界观】{app_state.settings['world_view']}\n【全书当前剧情梗概】{book_summary}\n【本章相关资料】{char_prompt_str}\n【历史背景资料 (已清洗)】{filtered_context}\n【本章大纲】标题：{title}\n内容：{outline}\n请撰写正文。"
-    ui.notify('AI 正在思考...', type='info', spinner=True)
+    
+    prompt = f"""
+    【世界观设定】
+    {app_state.settings['world_view']}
+    
+    【全书剧情脉络】
+    {book_summary}
+    
+    【相关人物档案】
+    {char_prompt_str}
+    
+    【当前场景关系网 (Graph Memory)】
+    {graph_context}
+    
+    【历史背景资料 (Vector Memory)】
+    {filtered_context}
+    
+    ---------------------------------------------------
+    【本章写作任务】
+    章节标题：{title}
+    本章大纲：{outline}
+    
+    请基于以上资料，撰写本章正文。
+    要求：
+    1. 逻辑严密，注意利用【关系网】中的设定（如持有物品、人际恩怨）。
+    2. 风格契合世界观，多用展示而非讲述。
+    3. 篇幅适中，节奏紧凑。
+    """
+    
+    ui.notify('AI 正在沉浸式思考...', type='info', spinner=True)
+    
+    # 调用 writer 模型
     res = await run.io_bound(backend.sync_call_llm, prompt, CFG['prompts']['writer_system'], task_type="writer")
     
-    if "Error" in res: ui.notify(res, type='negative')
+    if "Error" in res:
+        ui.notify(res, type='negative')
     else:
         ui_refs['editor_content'].value = res
         update_char_count()
-        ui.notify('生成完毕！', type='positive')
+        ui.notify('生成完毕！已融合图谱记忆。', type='positive')
 
 async def open_history_dialog():
     chapter = app_state.get_current_chapter()

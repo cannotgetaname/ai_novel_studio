@@ -591,7 +591,7 @@ def refresh_config_ui():
                     .tooltip('设置为 0 则关闭自动备份')
                 
                 ui.label('💡 提示：每次点击“保存”按钮时，系统会自动为当前章节创建“历史快照”。').classes('text-xs text-grey-600 mt-1')
-
+        
         # 保存按钮
         async def save_config():
             try:
@@ -760,3 +760,75 @@ def open_inspiration_dialog():
             ui.button('复制结果', on_click=lambda: ui.run_javascript(f'navigator.clipboard.writeText(`{result_area.value}`)') and ui.notify('已复制')).props('color=primary')
 
     dialog.open()
+
+# ================= 🕸️ 全域图谱独立面板 =================
+
+def create_global_graph_panel():
+    # 1. 顶层容器：设为 flex 列布局，并强制 h-full 占满 Tab 面板
+    with ui.column().classes('w-full h-full p-0 gap-0 no-wrap'):
+        
+        # 2. 顶部工具栏 (固定高度)
+        with ui.row().classes('w-full items-center justify-between p-2 bg-grey-2 border-b shrink-0'):
+            with ui.row().classes('items-center gap-2'):
+                ui.icon('hub', size='sm', color='primary')
+                ui.label('上帝视角 · 全域关系网').classes('text-lg font-bold text-grey-8')
+                ui.label('包含：人物(蓝) / 地点(绿) / 物品(黄)').classes('text-xs text-grey-6 ml-2')
+            
+            refresh_btn = ui.button('🔄 重绘图谱', on_click=lambda: load_graph()).props('flat color=primary icon=refresh')
+
+        # 3. 图谱容器 (关键修复)
+        # 使用 flex-grow 让其占据剩余所有空间，h-0 是 flex 布局的一个 trick，防止内容溢出撑坏布局
+        graph_container = ui.element('div').classes('w-full flex-grow h-0 relative bg-white')
+        
+        async def load_graph():
+            graph_container.clear()
+            # 加载时显示 Spinner
+            with graph_container:
+                ui.spinner('dots', size='lg', color='primary').classes('absolute-center')
+            
+            # 后台计算
+            world_graph = backend.WorldGraph(manager)
+            await run.io_bound(world_graph.rebuild)
+            data = await run.io_bound(world_graph.get_echarts_data)
+            
+            graph_container.clear()
+            with graph_container:
+                if not data['nodes']:
+                    with ui.column().classes('w-full h-full items-center justify-center text-grey'):
+                        ui.icon('sentiment_dissatisfied', size='xl')
+                        ui.label('暂无数据')
+                else:
+                    # ECharts 渲染
+                    chart = ui.echart({
+                        "title": {
+                            "text": f"实体: {len(data['nodes'])} | 关系: {len(data['links'])}", 
+                            "textStyle": {"fontSize": 12, "color": "#999"},
+                            "bottom": 10, "left": 10
+                        },
+                        "tooltip": {"trigger": "item"},
+                        "legend": [{"data": ["character", "location", "item"], "top": 10, "right": 10}],
+                        "series": [{
+                            "type": "graph",
+                            "layout": "force",
+                            "data": data['nodes'],
+                            "links": data['links'],
+                            "categories": data['categories'],
+                            "roam": True,
+                            "draggable": True,
+                            "zoom": 0.8,
+                            "label": {"show": True, "position": "right", "formatter": "{b}"},
+                            "lineStyle": {"color": "source", "curveness": 0.1},
+                            "force": {
+                                "repulsion": 300,
+                                "gravity": 0.05,
+                                "edgeLength": 120,
+                                "layoutAnimation": True
+                            }
+                        }]
+                    })
+                    # 【关键修复】强制 ECharts 组件占满父容器
+                    chart.classes('w-full h-full')
+                    chart.style('height: 100%; width: 100%;')
+
+        # 初始加载
+        ui.timer(0.1, load_graph, once=True)

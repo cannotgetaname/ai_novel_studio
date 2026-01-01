@@ -7,6 +7,126 @@ import shutil # <--- 新增
 import glob   # <--- 新增
 from datetime import datetime # <--- 必须加这一行！
 
+import networkx as nx
+
+class WorldGraph:
+    def __init__(self, manager):
+        self.manager = manager
+        self.G = nx.DiGraph() # 有向图
+
+    # 【核心】从现有的 app_state 动态构建图谱
+    # 每次写作前调用一次，保证数据最新
+    def rebuild(self):
+        self.G.clear()
+        
+        # 1. 加载人物数据 (现有格式)
+        # char: {'name': '叶凡', 'relations': [{'target': '黑皇', 'type': '损友'}]}
+        chars = self.manager.load_characters()
+        for c in chars:
+            # 添加人物节点
+            self.G.add_node(c['name'], type='character', desc=c.get('bio', '')[:50])
+            
+            # 添加人物关系边
+            for rel in c.get('relations', []):
+                # 确保目标节点也存在（防止死链）
+                if rel['target']:
+                    self.G.add_edge(c['name'], rel['target'], relation=rel['type'], weight=2)
+
+        # 2. 加载地点数据 (现有格式)
+        # loc: {'name': '紫山', 'neighbors': ['矿区'], 'parent': '北域'}
+        locs = self.manager.load_locations()
+        for l in locs:
+            # 添加地点节点
+            self.G.add_node(l['name'], type='location', desc=l.get('desc', '')[:50])
+            
+            # 添加拓扑连接 (双向边)
+            for n in l.get('neighbors', []):
+                self.G.add_edge(l['name'], n, relation="连通", weight=1)
+            
+            # 添加行政归属 (父子边)
+            if l.get('parent'):
+                self.G.add_edge(l['name'], l['parent'], relation="属于", weight=0.5)
+
+        # 3. 加载物品数据 (现有格式) -> 关联到持有者
+        # item: {'name': '万物母气鼎', 'owner': '叶凡'}
+        items = self.manager.load_items()
+        for i in items:
+            self.G.add_node(i['name'], type='item', desc=i.get('desc', '')[:50])
+            if i.get('owner'):
+                self.G.add_edge(i['owner'], i['name'], relation="持有", weight=3)
+
+    # --- GraphRAG 功能：获取某人的“关系网文本” ---
+    def get_context_text(self, center_node, hops=1):
+        if center_node not in self.G: return ""
+        
+        # 提取 1-2 跳的子图
+        # 比如：叶凡 ->(持有)-> 鼎； 叶凡 ->(仇人)-> 姬皓月
+        nodes = {center_node}
+        for _ in range(hops):
+            new_nodes = set()
+            for n in nodes:
+                new_nodes.update(self.G.neighbors(n))      # 我连别人
+                new_nodes.update(self.G.predecessors(n))   # 别人连我
+            nodes.update(new_nodes)
+        
+        subgraph = self.G.subgraph(nodes)
+        
+        # 转成自然语言文本，喂给 AI
+        lines = []
+        for u, v, d in subgraph.edges(data=True):
+            rel = d.get('relation', '关联')
+            lines.append(f"- {u} {rel} {v}")
+            
+        return "\n".join(lines)
+
+    # --- 寻路功能：查找两者关系 ---
+    def find_relation_path(self, start, end):
+        try:
+            path = nx.shortest_path(self.G, start, end)
+            return " -> ".join(path)
+        except:
+            return ""
+    # 【新增】导出 ECharts 可视化数据
+    def get_echarts_data(self):
+        nodes = []
+        links = []
+        categories = [{"name": "character"}, {"name": "location"}, {"name": "item"}]
+        
+        # 颜色配置 (Hardcoded for stability)
+        color_map = {
+            "character": "#5470c6", # 蓝
+            "location": "#91cc75",  # 绿
+            "item": "#fac858"       # 黄
+        }
+
+        for n, attr in self.G.nodes(data=True):
+            ntype = attr.get('type', 'unknown')
+            # 根据类型决定大小
+            symbol_size = 30
+            if ntype == 'location': symbol_size = 40
+            elif ntype == 'item': symbol_size = 20
+            
+            nodes.append({
+                "name": n,
+                "category": ntype, # 对应 categories 下标或名称
+                "symbolSize": symbol_size,
+                "draggable": True,
+                "value": attr.get('desc', '')[:20],
+                "itemStyle": {"color": color_map.get(ntype, '#ccc')},
+                "label": {"show": True, "position": "right"}
+            })
+        
+        for u, v, attr in self.G.edges(data=True):
+            links.append({
+                "source": u,
+                "target": v,
+                "value": attr.get('relation', ''),
+                "label": {"show": True, "formatter": "{c}"}, # 显示关系名
+                "lineStyle": {"curveness": 0.2, "color": "source"}
+            })
+            
+        return {"nodes": nodes, "links": links, "categories": categories}
+
 # ================= 配置加载 =================
 def load_config():
     # 优先读取 config.json，不存在则读取 config.example.json，再没有则返回空
