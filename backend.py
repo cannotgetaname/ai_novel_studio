@@ -267,6 +267,116 @@ class NovelManager:
         settings['book_summary'] = global_summary
         self.save_settings(settings)
         return global_summary
+    # 【新增】全局搜索
+    def global_search(self, term):
+        if not term: return []
+        results = []
+        
+        # 1. 搜设定 (Settings)
+        settings = self.load_settings()
+        for k, v in settings.items():
+            if isinstance(v, str) and term in v:
+                results.append({"type": "setting", "key": k, "name": "系统设定", "preview": self._get_preview(v, term)})
+
+        # 2. 搜章节列表 (Title/Outline)
+        structure = self.load_structure()
+        for chap in structure:
+            if term in chap['title']:
+                results.append({"type": "chap_meta", "id": chap['id'], "field": "title", "name": f"第{chap['id']}章标题", "preview": chap['title']})
+            if term in chap['outline']:
+                results.append({"type": "chap_meta", "id": chap['id'], "field": "outline", "name": f"第{chap['id']}章大纲", "preview": self._get_preview(chap['outline'], term)})
+            
+            # 3. 搜章节正文 (Content)
+            content = self.load_chapter_content(chap['id'])
+            if term in content:
+                # 统计出现次数
+                count = content.count(term)
+                results.append({"type": "chap_content", "id": chap['id'], "name": f"第{chap['id']}章正文", "preview": self._get_preview(content, term), "count": count})
+
+        # 4. 搜数据库 (Char/Item/Loc)
+        chars = self.load_characters()
+        for i, c in enumerate(chars):
+            for k, v in c.items():
+                if isinstance(v, str) and term in v:
+                    results.append({"type": "char", "index": i, "field": k, "name": f"人物: {c['name']}", "preview": self._get_preview(v, term)})
+        
+        items = self.load_items()
+        for i, it in enumerate(items):
+            for k, v in it.items():
+                if isinstance(v, str) and term in v:
+                    results.append({"type": "item", "index": i, "field": k, "name": f"物品: {it['name']}", "preview": self._get_preview(v, term)})
+                    
+        locs = self.load_locations()
+        for i, l in enumerate(locs):
+            for k, v in l.items():
+                if isinstance(v, str) and term in v:
+                    results.append({"type": "loc", "index": i, "field": k, "name": f"地点: {l['name']}", "preview": self._get_preview(v, term)})
+
+        return results
+
+    # 辅助：获取带高亮的预览片段
+    def _get_preview(self, text, term, window=20):
+        idx = text.find(term)
+        if idx == -1: return text[:50]
+        start = max(0, idx - window)
+        end = min(len(text), idx + len(term) + window)
+        return f"...{text[start:end]}..."
+
+    # 【新增】全局替换
+    def global_replace(self, target_items, old_term, new_term):
+        # 为了安全，重新加载所有数据
+        settings = self.load_settings()
+        structure = self.load_structure()
+        chars = self.load_characters()
+        items = self.load_items()
+        locs = self.load_locations()
+        
+        updated_files = set() # 记录哪些文件被修改了
+        
+        for item in target_items:
+            try:
+                if item['type'] == 'setting':
+                    settings[item['key']] = settings[item['key']].replace(old_term, new_term)
+                    updated_files.add('settings')
+                
+                elif item['type'] == 'chap_meta':
+                    for chap in structure:
+                        if chap['id'] == item['id']:
+                            chap[item['field']] = chap[item['field']].replace(old_term, new_term)
+                            updated_files.add('structure')
+                            break
+                
+                elif item['type'] == 'chap_content':
+                    # 正文是单独的文件，直接读取-替换-保存
+                    content = self.load_chapter_content(item['id'])
+                    new_content = content.replace(old_term, new_term)
+                    self.save_chapter_content(item['id'], new_content)
+                    # 还需要更新向量库吗？理论上需要，但太慢了，建议用户手动触发或后台慢慢更。
+                    # 这里为了速度暂不更新RAG，只更文件。
+                
+                elif item['type'] == 'char':
+                    chars[item['index']][item['field']] = chars[item['index']][item['field']].replace(old_term, new_term)
+                    updated_files.add('char')
+                
+                elif item['type'] == 'item':
+                    items[item['index']][item['field']] = items[item['index']][item['field']].replace(old_term, new_term)
+                    updated_files.add('item')
+                
+                elif item['type'] == 'loc':
+                    locs[item['index']][item['field']] = locs[item['index']][item['field']].replace(old_term, new_term)
+                    updated_files.add('loc')
+
+            except Exception as e:
+                print(f"Replace error at {item}: {e}")
+
+        # 批量保存
+        if 'settings' in updated_files: self.save_settings(settings)
+        if 'structure' in updated_files: self.save_structure(structure)
+        if 'char' in updated_files: self.save_characters(chars)
+        if 'item' in updated_files: self.save_items(items)
+        if 'loc' in updated_files: self.save_locations(locs)
+        
+        return f"已在 {len(target_items)} 处完成替换"
 
 # ================= 向量库管理器 (RAG) =================
 class MemoryManager:

@@ -108,7 +108,10 @@ async def main_page():
             ui.button('删除分卷', on_click=writing.delete_volume_dialog).props('outline color=red size=sm icon=folder_delete')
             ui.button('新建章节', on_click=writing.add_new_chapter_auto).props('color=green size=sm icon=note_add')
             ui.button('删除章节', on_click=writing.delete_current_chapter).props('color=red size=sm icon=delete_forever')
-
+        ui.separator().classes('my-2')
+        ui.label('🛠️ 全局工具').classes('text-xs font-bold text-grey-6 mb-1')
+        ui.button('🔍 全局查找与替换', on_click=settings.open_global_search_dialog) \
+            .props('flat color=blue-grey icon=find_replace w-full align=left').classes('w-full')
     with ui.header().classes('bg-white text-black shadow-sm'):
         ui.button(on_click=lambda: drawer.toggle(), icon='menu').props('flat color=black')
         ui.label('AI 网文工作站 (V15.2 配置管理版)').classes('text-h6')

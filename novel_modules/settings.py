@@ -596,3 +596,115 @@ def refresh_config_ui():
                 ui.notify(res, type='positive')
                 
         ui.button('💾 保存系统配置', on_click=save_config).props('color=primary icon=save').classes('w-full mt-4 h-12 text-lg')
+
+# ================= 全局查找替换工具 =================
+
+def open_global_search_dialog():
+    with ui.dialog() as dialog, ui.card().classes('w-2/3 h-3/4'):
+        ui.label('🔍 全局查找与替换').classes('text-h6')
+        ui.label('扫描范围：正文、大纲、设定集、人物、物品、地点').classes('text-xs text-grey')
+        
+        with ui.row().classes('w-full items-center gap-4'):
+            find_input = ui.input('查找内容').classes('flex-grow')
+            replace_input = ui.input('替换为').classes('flex-grow')
+            search_btn = ui.button('开始扫描', icon='search').props('color=primary')
+        
+        # 结果展示区
+        result_area = ui.column().classes('w-full flex-grow border p-2 scroll-y')
+        
+        # 状态栏
+        status_label = ui.label('').classes('text-sm font-bold text-blue-600')
+        
+        # 存储搜索结果
+        search_results = []
+        selected_results = [] # 勾选要替换的项
+
+        async def perform_search():
+            term = find_input.value
+            if not term: ui.notify('请输入查找内容', type='warning'); return
+            
+            status_label.set_text('正在全域扫描...')
+            result_area.clear()
+            
+            # 调用后端搜索
+            results = await run.io_bound(manager.global_search, term)
+            search_results.clear()
+            search_results.extend(results)
+            selected_results.clear()
+            selected_results.extend(results) # 默认全选
+            
+            status_label.set_text(f"扫描完成，共发现 {len(results)} 处匹配。")
+            
+            if not results:
+                result_area.clear()
+                with result_area:
+                    ui.label('未找到匹配项').classes('w-full text-center text-grey mt-10')
+                return
+
+            # 渲染结果列表
+            with result_area:
+                with ui.list().classes('w-full dense'):
+                    for res in results:
+                        with ui.item().classes('w-full border-b border-grey-200'):
+                            # 复选框
+                            def on_check(e, item=res):
+                                if e.value: selected_results.append(item)
+                                else: selected_results.remove(item)
+                            
+                            with ui.item_section().props('side'):
+                                ui.checkbox(value=True, on_change=on_check)
+                            
+                            # 信息展示
+                            with ui.item_section():
+                                with ui.row().classes('items-center gap-2'):
+                                    # 类型标签
+                                    color = 'grey'
+                                    if 'chap' in res['type']: color = 'blue'
+                                    elif res['type'] == 'char': color = 'purple'
+                                    elif res['type'] == 'loc': color = 'green'
+                                    ui.badge(res['name'], color=color).props('outline')
+                                    
+                                    # 预览内容 (高亮查找词)
+                                    preview_html = res['preview'].replace(term, f'<span class="bg-yellow-200 font-bold text-red-600">{term}</span>')
+                                    ui.html(preview_html).classes('text-sm text-grey-8')
+                                    
+                                    if res.get('count', 1) > 1:
+                                        ui.badge(f"{res['count']}处", color='red').props('rounded size=xs')
+
+        async def perform_replace():
+            if not selected_results: ui.notify('未选择任何项目', type='warning'); return
+            old_term = find_input.value
+            new_term = replace_input.value
+            if not old_term: return
+            
+            n = len(selected_results)
+            
+            # 二次确认
+            with ui.dialog() as confirm_d, ui.card():
+                ui.label('⚠️ 高危操作确认').classes('text-h6 text-red')
+                ui.label(f'即将把 {n} 处 "{old_term}" 替换为 "{new_term}"。').classes('text-lg')
+                ui.label('此操作涉及修改底层文件，请确保您已备份数据！').classes('text-sm font-bold')
+                
+                async def execute():
+                    confirm_d.close()
+                    ui.notify('正在批量替换...', spinner=True)
+                    msg = await run.io_bound(manager.global_replace, selected_results, old_term, new_term)
+                    ui.notify(msg, type='positive', timeout=5000)
+                    dialog.close()
+                    # 刷新一下当前章节，防止编辑器里还是旧的
+                    from . import writing
+                    if app_state.current_chapter_idx >= 0:
+                        await writing.load_chapter(app_state.current_chapter_idx)
+                
+                with ui.row().classes('w-full justify-end'):
+                    ui.button('取消', on_click=confirm_d.close).props('flat')
+                    ui.button('确认替换', on_click=execute).props('color=red')
+            confirm_d.open()
+
+        search_btn.on_click(perform_search)
+        
+        with ui.row().classes('w-full justify-end mt-2 bg-grey-1 p-2 rounded'):
+            ui.button('关闭', on_click=dialog.close).props('flat color=grey')
+            ui.button('执行替换', icon='save_as', on_click=perform_replace).props('color=red')
+
+    dialog.open()
