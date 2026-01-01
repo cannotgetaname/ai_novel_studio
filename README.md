@@ -90,7 +90,7 @@ pip install nicegui chromadb openai
 
 {
     "api_key": "YOUR_API_KEY",
-    "base_url": "[https://api.deepseek.com](https://api.deepseek.com)",
+    "base_url": "https://api.deepseek.com",
     "project_dir": "MyNovel_Data",
     "chroma_db_path": "chroma_db",
     "chunk_size": 500,
