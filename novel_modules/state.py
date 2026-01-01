@@ -10,7 +10,7 @@ CFG = backend.CFG
 class AppState:
     def __init__(self):
         # 数据层
-        self.volumes = manager.load_volumes() # 【新增】加载分卷
+        self.volumes = manager.load_volumes()
         self.structure = manager.load_structure()
         self.settings = manager.load_settings()
         self.characters = manager.load_characters()
@@ -21,17 +21,15 @@ class AppState:
         self.current_chapter_idx = 0
         self.current_content = ""
         
-        # 【新增】UI状态：记录展开的分卷ID集合
+        # UI状态：记录展开的分卷ID集合
         self.expanded_volumes = set()
-        # 默认展开第一个分卷（如果有）
         if self.volumes:
             self.expanded_volumes.add(self.volumes[0]['id'])
 
-        # 全局回调函数 (由 main.py 注入)
+        # 全局回调函数
         self.refresh_sidebar = None
         self.refresh_total_word_count = None
 
-    # 辅助：获取当前章节对象
     def get_current_chapter(self):
         if not self.structure: return None
         if self.current_chapter_idx >= len(self.structure):
@@ -49,5 +47,12 @@ ui_refs = {
     'right_tabs': None, 'tab_ctx': None, 'tab_rev': None,
     'char_count': None, 'total_count': None,
     'char_view_mode': None, 'char_graph_container': None,
-    'time_label': None, 'time_events': None, 'timeline_container': None
+    'time_label': None, 'time_events': None, 'timeline_container': None,
+    'save_status': None,  # 【新增】用于显示自动保存状态
+    'time_label': None, 'time_events': None, 'timeline_container': None,
+    'save_status': None, 'config_container': None,
+    
+    # 【新增】地点视图控制
+    'loc_view_mode': None, 
+    'loc_graph_container': None
 }

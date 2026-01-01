@@ -6,13 +6,36 @@ from openai import OpenAI
 
 # ================= 配置加载 =================
 def load_config():
-    if not os.path.exists("config.json"):
-        return {}
-    with open("config.json", 'r', encoding='utf-8') as f:
-        return json.load(f)
+    # 优先读取 config.json，不存在则读取 config.example.json，再没有则返回空
+    if os.path.exists("config.json"):
+        with open("config.json", 'r', encoding='utf-8') as f:
+            return json.load(f)
+    elif os.path.exists("config.example.json"):
+        with open("config.example.json", 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
 
 CFG = load_config()
+# 初始化全局 client
 client = OpenAI(api_key=CFG.get('api_key'), base_url=CFG.get('base_url'))
+
+# 【新增】保存配置并热重载
+def save_global_config(new_config):
+    global CFG, client
+    try:
+        # 1. 写入文件
+        with open("config.json", 'w', encoding='utf-8') as f:
+            json.dump(new_config, f, ensure_ascii=False, indent=4)
+        
+        # 2. 热更新内存中的配置
+        CFG.update(new_config)
+        
+        # 3. 重置 OpenAI 客户端 (这一步很关键，否则改了 Key 不生效)
+        client = OpenAI(api_key=CFG.get('api_key'), base_url=CFG.get('base_url'))
+        
+        return "✅ 配置已保存，系统已热重载"
+    except Exception as e:
+        return f"❌ 保存失败: {str(e)}"
 
 # ================= 小说管理器 (数据层) =================
 class NovelManager:
@@ -349,12 +372,45 @@ def sync_analyze_time(content, prev_time_label):
         return response.choices[0].message.content
     except Exception as e: return f"Error: {str(e)}"
 
+# 【修改】状态分析接口：增加提取“地点连接”的指令
 def sync_analyze_state(content, current_data_summary):
     task_type = "auditor"
     model_name = CFG['models'].get(task_type, "deepseek-reasoner")
     temperature = CFG['temperatures'].get(task_type, 1.0)
     sys_prompt = CFG['prompts'].get('auditor_system', "你是一个世界观管理员。")
-    prompt = f"【当前正文】\n{content[:4000]}...\n【现有数据库摘要】\n{current_data_summary}\n【任务】提取状态变更、物品变更、新实体、关系变更。请严格返回 JSON。"
+    
+    prompt = f"""
+    【当前正文】
+    {content[:4000]}...
+    
+    【现有数据库摘要】
+    {current_data_summary}
+    
+    【任务】
+    请分析正文，检测以下变化：
+    1. **人物状态变更**：等级、状态(受伤/死亡)、所属势力。
+    2. **物品变更**：持有者转移、物品状态变化、新物品获得。
+    3. **新实体**：是否出现了**重要**的新人物、新物品或新地点？
+    4. **人际关系变更**：提取新关系（如拜师、结仇）或关系变化。
+    5. **地点连接 (新)**：主角是否从一个地点移动到了另一个地点？如果是，这意味着两个地点是连通的。提取这种拓扑关系。
+    
+    【输出格式】
+    严格 JSON 格式，字段如下：
+    {{
+        "char_updates": [{{"name": "...", "field": "...", "new_value": "...", "reason": "..."}}],
+        "item_updates": [{{"name": "...", "field": "...", "new_value": "..."}}],
+        "new_chars": [{{"name": "...", "gender": "...", "role": "...", "status": "...", "bio": "..."}}],
+        "new_items": [{{"name": "...", "type": "...", "owner": "...", "desc": "..."}}],
+        "new_locs": [{{"name": "...", "faction": "...", "desc": "..."}}],
+        "relation_updates": [
+            {{"source": "主动方", "target": "被动方", "type": "关系类型", "desc": "说明"}}
+        ],
+        "loc_connections": [
+            {{"source": "地点A", "target": "地点B", "desc": "移动/连接说明"}}
+        ]
+    }}
+    """
+    print(f"\n[LLM Router] 任务: State Auditor | 模型: {model_name}")
     try:
         response = client.chat.completions.create(
             model=model_name,
@@ -365,8 +421,11 @@ def sync_analyze_state(content, current_data_summary):
         return response.choices[0].message.content
     except Exception as e: return f"Error: {str(e)}"
 
+# 【修改】应用变更：增加处理“地点连接”的逻辑
 def apply_state_changes(novel_manager, changes):
     logs = []
+    
+    # 1. 更新人物 (保持不变)
     chars = novel_manager.load_characters()
     for update in changes.get('char_updates', []):
         for char in chars:
@@ -393,6 +452,7 @@ def apply_state_changes(novel_manager, changes):
     
     novel_manager.save_characters(chars)
 
+    # 2. 更新物品 (保持不变)
     items = novel_manager.load_items()
     for update in changes.get('item_updates', []):
         for item in items:
@@ -405,11 +465,38 @@ def apply_state_changes(novel_manager, changes):
             logs.append(f"新增物品: {new_item['name']}")
     novel_manager.save_items(items)
 
+    # 3. 更新地点 (增加连接处理逻辑)
     locs = novel_manager.load_locations()
+    
+    # A. 先处理新地点 (防止连接时找不到地点)
     for new_loc in changes.get('new_locs', []):
         if not any(l['name'] == new_loc['name'] for l in locs):
+            if 'neighbors' not in new_loc: new_loc['neighbors'] = []
             locs.append(new_loc)
             logs.append(f"新增地点: {new_loc['name']}")
+    
+    # B. 处理连接关系
+    for conn in changes.get('loc_connections', []):
+        loc_a = next((l for l in locs if l['name'] == conn['source']), None)
+        loc_b = next((l for l in locs if l['name'] == conn['target']), None)
+        
+        if loc_a and loc_b:
+            # 确保有 neighbors 字段
+            if 'neighbors' not in loc_a: loc_a['neighbors'] = []
+            if 'neighbors' not in loc_b: loc_b['neighbors'] = []
+            
+            # 双向添加 (避免重复)
+            added = False
+            if conn['target'] not in loc_a['neighbors']:
+                loc_a['neighbors'].append(conn['target'])
+                added = True
+            if conn['source'] not in loc_b['neighbors']:
+                loc_b['neighbors'].append(conn['source'])
+                added = True
+            
+            if added:
+                logs.append(f"新增地图连接: {conn['source']} ↔️ {conn['target']}")
+
     novel_manager.save_locations(locs)
 
     return logs

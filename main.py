@@ -29,6 +29,8 @@ async def main_page():
     ui_refs['time_label'] = None
     ui_refs['time_events'] = None
     ui_refs['timeline_container'] = None
+    ui_refs['save_status'] = None
+    ui_refs['config_container'] = None
 
     # 2. 定义辅助函数
     async def refresh_total_word_count():
@@ -37,7 +39,6 @@ async def main_page():
             total = await run.io_bound(manager.get_total_word_count)
             ui_refs['total_count'].set_text(f"全书字数: {total:,}")
 
-    # 【核心修改】侧边栏刷新逻辑：增加编辑按钮
     def refresh_sidebar():
         if not ui_refs['chapter_list']: return
         ui_refs['chapter_list'].clear()
@@ -64,7 +65,6 @@ async def main_page():
                                 .props(f'flat color={color} align=left no-caps dense size=sm') \
                                 .classes('w-full text-left pl-4 hover:bg-grey-100')
                         
-                        # 【新增】分卷操作栏：编辑、添加章节
                         with ui.row().classes('w-full justify-end pr-2 pt-1 border-t border-dashed'):
                             ui.button(icon='edit', on_click=lambda v=vol['id']: writing.rename_volume(v)) \
                                 .props('flat size=xs color=grey').tooltip('重命名分卷')
@@ -80,14 +80,12 @@ async def main_page():
     with ui.left_drawer(value=True).classes('bg-blue-50 flex flex-col') as drawer:
         ui.label('📚 章节目录').classes('text-h6 q-mb-md')
         
-        # 控制面板卡片
         with ui.card().classes('w-full q-mb-sm bg-white p-2'):
             ui_refs['total_count'] = ui.label('全书字数: ---').classes('text-sm font-bold')
             with ui.row().classes('w-full'):
                 ui.button('🔄 刷新', on_click=lambda: refresh_total_word_count()).props('flat size=sm color=primary').classes('w-1/2')
                 ui.button('📤 导出', on_click=lambda: writing.export_novel()).props('flat size=sm color=grey').classes('w-1/2')
             
-            # 全书梗概按钮
             with ui.row().classes('w-full q-mt-sm'):
                 async def show_book_summary():
                     settings = await run.io_bound(manager.load_settings)
@@ -100,12 +98,10 @@ async def main_page():
                     d.open()
                 ui.button('📖 全书梗概', on_click=show_book_summary).props('flat size=sm color=purple').classes('w-full')
 
-        # 章节列表区域 (可滚动)
         with ui.scroll_area().classes('w-full flex-grow'):
             ui_refs['chapter_list'] = ui.column().classes('w-full')
             refresh_sidebar()
         
-        # 底部功能按钮
         ui.separator().classes('my-2')
         with ui.grid(columns=2).classes('w-full gap-2 pb-2'):
             ui.button('新建分卷', on_click=writing.add_new_volume).props('outline color=indigo size=sm icon=create_new_folder')
@@ -115,7 +111,7 @@ async def main_page():
 
     with ui.header().classes('bg-white text-black shadow-sm'):
         ui.button(on_click=lambda: drawer.toggle(), icon='menu').props('flat color=black')
-        ui.label('AI 网文工作站 (V15.1 编辑优化版)').classes('text-h6')
+        ui.label('AI 网文工作站 (V15.2 配置管理版)').classes('text-h6')
 
     with ui.tabs().classes('w-full') as tabs:
         tab_write = ui.tab('写作')
@@ -130,12 +126,14 @@ async def main_page():
             writing.create_writing_tab()
 
         # Tab 2: 设定
-        with ui.tab_panel(tab_setting).classes('h-full p-0'):
+        # 【核心修复】这里必须加上 flex flex-col，否则子级 flex-grow 无效，导致高度塌陷
+        with ui.tab_panel(tab_setting).classes('h-full p-0 flex flex-col'):
             with ui.tabs().classes('w-full bg-grey-2') as set_tabs:
                 t_world = ui.tab('世界观')
                 t_char = ui.tab('人物')
                 t_item = ui.tab('物品')
                 t_loc = ui.tab('地点')
+                t_config = ui.tab('系统配置')
             
             with ui.tab_panels(set_tabs, value=t_world).classes('w-full flex-grow'):
                 with ui.tab_panel(t_world).classes('h-full p-4'):
@@ -171,12 +169,40 @@ async def main_page():
 
                 with ui.tab_panel(t_loc).classes('h-full p-2'):
                     with ui.column().classes('w-full h-full'):
-                        with ui.row().classes('w-full justify-end pb-2'):
-                            ui.button(icon='refresh', on_click=settings.refresh_loc_ui).props('flat round dense')
-                            ui.button('添加地点', icon='add', on_click=lambda: settings.open_loc_dialog()).props('size=sm color=green')
-                        with ui.scroll_area().classes('w-full').style('height: calc(100vh - 200px); border: 1px solid #eee'):
-                            ui_refs['loc_container'] = ui.column().classes('w-full p-1')
+                        # 顶部工具栏：切换按钮 + 刷新 + 添加
+                        with ui.row().classes('w-full justify-between items-center pb-2'):
+                            # 切换视图按钮组
+                            with ui.button_group():
+                                ui.button('列表', on_click=lambda: [ui_refs['loc_view_mode'].set_text('list'), settings.refresh_loc_ui()]).props('size=sm')
+                                ui.button('地图', on_click=lambda: [ui_refs['loc_view_mode'].set_text('graph'), settings.refresh_loc_ui()]).props('size=sm')
+                            # 隐藏的状态标签
+                            ui_refs['loc_view_mode'] = ui.label('list').classes('hidden')
+                            
+                            with ui.row():
+                                ui.button('整理', icon='build', on_click=settings.open_connection_manager).props('flat size=sm dense color=grey').tooltip('扫描并修复单向连接')
+                                ui.button(icon='refresh', on_click=settings.refresh_loc_ui).props('flat round dense')
+                                ui.button('添加地点', icon='add', on_click=lambda: settings.open_loc_dialog()).props('size=sm color=green')
+                        
+                        # 内容区域：双容器（列表/图谱）
+                        with ui.element('div').classes('w-full').style('height: calc(100vh - 200px); position: relative;'):
+                            # 1. 列表容器 (绑定可见性)
+                            with ui.scroll_area().classes('w-full h-full').bind_visibility_from(ui_refs['loc_view_mode'], 'text', backward=lambda x: x == 'list'):
+                                ui_refs['loc_container'] = ui.column().classes('w-full p-1')
+                            
+                            # 2. 地图容器 (绑定可见性)
+                            with ui.element('div').classes('w-full h-full').bind_visibility_from(ui_refs['loc_view_mode'], 'text', backward=lambda x: x == 'graph'):
+                                ui_refs['loc_graph_container'] = ui.column().classes('w-full h-full')
+                            
+                            # 初始刷新
                             settings.refresh_loc_ui()
+                
+                with ui.tab_panel(t_config).classes('h-full p-2'):
+                    with ui.column().classes('w-full h-full'):
+                        # 使用 calc 计算高度，减去顶部导航栏和 Tab 栏的大致高度(约200px)
+                        # 这种写法绝对不会塌陷
+                        with ui.scroll_area().classes('w-full').style('height: calc(100vh - 200px);'):
+                            ui_refs['config_container'] = ui.column().classes('w-full')
+                            settings.refresh_config_ui()
 
         # Tab 3: 架构师
         with ui.tab_panel(tab_arch).classes('p-4'):
