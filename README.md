@@ -64,14 +64,14 @@
 推荐使用 Python 3.10 或更高版本。
 我用的3.12.2
 
-
 #### 克隆项目
 ```bash
-git clone https://github.com/cannotgetaname/ai_novel_studio.git
+git clone [https://github.com/cannotgetaname/ai_novel_studio.git](https://github.com/cannotgetaname/ai_novel_studio.git)
 cd ai-novel-studio
 ```
 #### 创建虚拟环境 (推荐)
 ```bash
+
 python -m venv venv
 # Windows:
 .\venv\Scripts\activate
@@ -80,18 +80,17 @@ source venv/bin/activate
 ```
 #### 安装依赖
 ```bash
-pip install nicegui chromadb openai```
+
+pip install nicegui chromadb openai
 ```
 ### 2. 配置文件
 在项目根目录创建 config.json 文件（可复制 config.example.json），并填入你的 API Key。
-
-
 
 ```json
 
 {
     "api_key": "YOUR_API_KEY",
-    "base_url": "https://api.deepseek.com",
+    "base_url": "[https://api.deepseek.com](https://api.deepseek.com)",
     "project_dir": "MyNovel_Data",
     "chroma_db_path": "chroma_db",
     "chunk_size": 500,
@@ -133,40 +132,50 @@ pip install nicegui chromadb openai```
     }
 }
 ```
-
-### 3. 运行
-
+## 3. 运行
 ```bash
+
 python main.py
 ```
 终端显示 NiceGUI ready 后，浏览器会自动打开 http://localhost:8080。
 
 ## 📖 使用指南
 ### 侧边栏 (目录管理)：
-
 点击 “新建分卷” 创建你的第一卷。
 
 在分卷下点击 “+” 号添加章节。
 
+支持修改分卷名和章节名
+
 点击 “📖 全书梗概” 查看 AI 自动生成的剧情总纲。
+下方有全局查找替换、灵感百宝箱
 
 ### 写作 Tab：
-
 输入标题和大纲，点击 “🚀 生成”。
 
 写完后点击 “🌍 结算”，让 AI 帮你更新人物状态。
 
 点击 “💾 保存”，后台会自动更新剧情摘要。
 
-### 设定 Tab：
+可查看历史闪照和备份
 
-管理人物、物品、地点。支持列表模式和图谱模式切换。
+可局部重绘
+
+支持ai审稿
+
+### 设定 Tab：
+管理世界观、人物、物品、地点。支持列表模式和图谱模式切换。
+
+系统配置支持修改api-key,LLM路由、提示词、备份等
+
 
 ### 架构师 Tab：
-
 输入“后续剧情走向”，让 AI 基于全书伏笔为你规划未来 10 章的大纲。
+
+### 时间轴 Tab：
+根据正文提取时间轴
 
 ## 🤝 贡献与协议
 欢迎提交 Issue 或 Pull Request！ 本项目遵循 MIT 开源协议。
 
-Made with ❤️ by AI Novel Studio Team
+Made with ❤️ by cannotgetaname
