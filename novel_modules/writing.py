@@ -7,8 +7,11 @@ from datetime import datetime
 from .state import app_state, ui_refs, manager, memory, CFG
 from . import timeline
 
+last_backup_time = 0
+
 # ================= 全局变量 =================
-auto_save_timer = None  # 用于防抖的定时器
+auto_save_timer = None
+is_loading = False  # 【核心修复】加载锁：防止加载数据时触发自动保存
 
 # ================= 辅助函数 =================
 
@@ -17,17 +20,20 @@ def update_char_count():
         text = ui_refs['editor_content'].value or ""
         ui_refs['char_count'].set_text(f"当前章节字数: {len(text)}")
 
-# 【核心】执行自动保存（轻量级：只存磁盘，不更新RAG/摘要）
+# 执行自动保存
 async def perform_auto_save():
+    # 【双重保险】如果标题为空，坚决不保存！防止覆盖成空数据
+    if not ui_refs['editor_title'] or not ui_refs['editor_title'].value:
+        return
+
     chapter = app_state.get_current_chapter()
     if not chapter: return
     
-    # 获取当前内容
     title = ui_refs['editor_title'].value
     outline = ui_refs['editor_outline'].value
     content = ui_refs['editor_content'].value
     
-    # 更新内存中的结构数据
+    # 更新内存
     chapter['title'] = title
     chapter['outline'] = outline
     
@@ -35,57 +41,66 @@ async def perform_auto_save():
     await run.io_bound(manager.save_chapter_content, chapter['id'], content)
     await run.io_bound(manager.save_structure, app_state.structure)
     
-    # 更新 UI 状态提示
     if ui_refs['save_status']:
         now_str = datetime.now().strftime("%H:%M:%S")
         ui_refs['save_status'].set_text(f"☁️ 已自动保存 ({now_str})")
         ui_refs['save_status'].classes('text-green-600')
-        
-        # 3秒后自动清除提示，保持界面整洁
         ui.timer(3.0, lambda: ui_refs['save_status'].set_text('') if ui_refs['save_status'] else None, once=True)
 
-# 处理文本变更（含防抖逻辑）
+async def run_auto_backup_check():
+    global last_backup_time
+    import time
+    
+    # 获取配置的间隔 (默认 30 分钟)
+    interval_min = CFG.get('backup_interval', 30)
+    if interval_min <= 0: return # 0 表示关闭
+
+    interval_sec = interval_min * 60
+    now = time.time()
+    
+    if now - last_backup_time > interval_sec:
+        ui.notify('正在后台执行全项目备份...', type='info', position='bottom-right')
+        res = await run.io_bound(manager.create_project_backup)
+        last_backup_time = now
+        ui.notify(res, type='positive', position='bottom-right')
+
+# 处理文本变更
 def handle_text_change(e):
     global auto_save_timer
     
-    # 1. 更新字数
+    # 【核心修复】如果是程序正在加载章节，忽略这次变更
+    if is_loading: 
+        return
+
     update_char_count()
     
-    # 2. 重置自动保存定时器 (防抖: 连续输入时不保存)
     if auto_save_timer:
         auto_save_timer.cancel()
     
-    # 3. 设置新定时器：停止输入 3 秒后触发保存
     auto_save_timer = ui.timer(3.0, perform_auto_save, once=True)
     
-    # 4. 更新状态为“输入中...”
     if ui_refs['save_status']:
         ui_refs['save_status'].set_text("✍️ 输入中...")
         ui_refs['save_status'].classes('text-orange-400')
 
-# ================= 分卷与章节管理 =================
+# ================= 分卷与章节管理 (保持不变) =================
+# ... (add_new_volume, rename_volume, delete_volume_dialog, add_chapter_to_volume, add_new_chapter_auto, delete_current_chapter 代码与之前相同，此处省略以节省篇幅，请保留您原有的这部分代码) ...
 
 async def add_new_volume():
     with ui.dialog() as dialog, ui.card().classes('w-96'):
         ui.label('📚 新建分卷').classes('text-h6')
         default_name = f"第{len(app_state.volumes)+1}卷"
         name_input = ui.input('分卷名称', value=default_name).classes('w-full')
-        
         async def confirm():
             if not name_input.value: return
             new_vol_id = f"vol_{str(uuid.uuid4())[:8]}"
-            new_vol = {
-                "id": new_vol_id,
-                "title": name_input.value,
-                "order": len(app_state.volumes) + 1
-            }
+            new_vol = {"id": new_vol_id, "title": name_input.value, "order": len(app_state.volumes) + 1}
             app_state.volumes.append(new_vol)
             await run.io_bound(manager.save_volumes, app_state.volumes)
             app_state.expanded_volumes.add(new_vol_id)
             if app_state.refresh_sidebar: app_state.refresh_sidebar()
             dialog.close()
             ui.notify(f'分卷 "{name_input.value}" 已创建', type='positive')
-            
         with ui.row().classes('w-full justify-end'):
             ui.button('取消', on_click=dialog.close).props('flat')
             ui.button('创建', on_click=confirm).props('color=primary')
@@ -94,11 +109,9 @@ async def add_new_volume():
 async def rename_volume(vol_id):
     target_vol = next((v for v in app_state.volumes if v['id'] == vol_id), None)
     if not target_vol: return
-
     with ui.dialog() as dialog, ui.card().classes('w-96'):
         ui.label('✏️ 重命名分卷').classes('text-h6')
         name_input = ui.input('新名称', value=target_vol['title']).classes('w-full')
-        
         async def confirm():
             if not name_input.value: return
             target_vol['title'] = name_input.value
@@ -106,7 +119,6 @@ async def rename_volume(vol_id):
             if app_state.refresh_sidebar: app_state.refresh_sidebar()
             dialog.close()
             ui.notify('分卷名称已更新', type='positive')
-            
         with ui.row().classes('w-full justify-end'):
             ui.button('取消', on_click=dialog.close).props('flat')
             ui.button('保存', on_click=confirm).props('color=primary')
@@ -117,7 +129,6 @@ async def delete_volume_dialog():
         ui.label('🗑️ 删除分卷').classes('text-h6 text-red')
         vol_options = {v['id']: v['title'] for v in app_state.volumes}
         selected_vol = ui.select(vol_options, label='选择要删除的分卷').classes('w-full')
-        
         async def confirm_del():
             vol_id = selected_vol.value
             if not vol_id: return
@@ -139,44 +150,27 @@ async def add_chapter_to_volume(vol_id=None):
     if not vol_id:
         if app_state.volumes:
             current_chap = app_state.get_current_chapter()
-            if current_chap: 
-                vol_id = current_chap.get('volume_id', app_state.volumes[-1]['id'])
-            else:
-                vol_id = app_state.volumes[-1]['id']
+            if current_chap: vol_id = current_chap.get('volume_id', app_state.volumes[-1]['id'])
+            else: vol_id = app_state.volumes[-1]['id']
         else:
-            ui.notify('请先新建分卷！', type='warning')
-            return
-
+            ui.notify('请先新建分卷！', type='warning'); return
     last_id = max([c['id'] for c in app_state.structure]) if app_state.structure else 0
     new_id = last_id + 1
-    
     insert_index = len(app_state.structure)
     vol_indices = [i for i, c in enumerate(app_state.structure) if c.get('volume_id') == vol_id]
-    if vol_indices:
-        insert_index = vol_indices[-1] + 1
-    
-    new_chap = {
-        "id": new_id, 
-        "title": f"第{new_id}章", 
-        "volume_id": vol_id,
-        "outline": "待补充", 
-        "summary": "", 
-        "time_info": {"label": "未知", "events": []}
-    }
-    
+    if vol_indices: insert_index = vol_indices[-1] + 1
+    new_chap = {"id": new_id, "title": f"第{new_id}章", "volume_id": vol_id, "outline": "待补充", "summary": "", "time_info": {"label": "未知", "events": []}}
     app_state.structure.insert(insert_index, new_chap)
     await run.io_bound(manager.save_structure, app_state.structure)
     await load_chapter(insert_index)
     ui.notify(f'已在当前卷末尾创建第{new_id}章', type='positive')
 
-async def add_new_chapter_auto():
-    await add_chapter_to_volume(None)
+async def add_new_chapter_auto(): await add_chapter_to_volume(None)
 
 async def delete_current_chapter():
     if len(app_state.structure) <= 1: ui.notify('至少保留一章', type='warning'); return
     idx = app_state.current_chapter_idx
     chap_id = app_state.structure[idx]['id']
-    
     with ui.dialog() as dialog, ui.card():
         ui.label(f'确认删除第 {chap_id} 章？').classes('text-h6')
         async def confirm():
@@ -190,58 +184,62 @@ async def delete_current_chapter():
         ui.button('确认删除', on_click=confirm).props('color=red')
     dialog.open()
 
-# ================= 核心章节逻辑 =================
+# ================= 核心章节逻辑 (关键修改) =================
 
 async def load_chapter(index):
-    global auto_save_timer
+    global auto_save_timer, is_loading
     
-    # -----------------------------------------------------------
-    # 【Bug 修复】切换前，如果有点计时器在跑，说明有未保存的更改
-    # 必须先强制保存当前内容，再切换，防止丢失最后几秒的输入
-    # -----------------------------------------------------------
+    # 1. 切换前强制保存（只在非加载状态下）
     if auto_save_timer: 
-        auto_save_timer.cancel() # 取消定时任务
-        auto_save_timer = None   # 清空引用
-        # 强制立即保存当前编辑器里的内容到当前章节
+        auto_save_timer.cancel()
+        auto_save_timer = None
         await perform_auto_save() 
-        ui.notify('切换前已自动保存', type='positive', position='top')
 
     if not app_state.structure: return
     if index < 0: index = 0
     if index >= len(app_state.structure): index = len(app_state.structure) - 1
     
-    app_state.current_chapter_idx = index
-    chapter = app_state.structure[index]
+    # 2. 【核心修复】开启加载锁
+    is_loading = True
     
-    content = await run.io_bound(manager.load_chapter_content, chapter['id'])
-    app_state.current_content = content
-    
-    if ui_refs['editor_title']: ui_refs['editor_title'].value = chapter['title']
-    if ui_refs['editor_outline']: ui_refs['editor_outline'].value = chapter['outline']
-    if ui_refs['editor_content']: ui_refs['editor_content'].value = content
-    
-    # 重置保存状态提示
-    if ui_refs['save_status']: ui_refs['save_status'].set_text("")
+    try:
+        app_state.current_chapter_idx = index
+        chapter = app_state.structure[index]
+        
+        content = await run.io_bound(manager.load_chapter_content, chapter['id'])
+        app_state.current_content = content
+        
+        # 更新 UI (此时 is_loading=True，handle_text_change 会忽略这些变更)
+        if ui_refs['editor_title']: ui_refs['editor_title'].value = chapter['title']
+        if ui_refs['editor_outline']: ui_refs['editor_outline'].value = chapter['outline']
+        if ui_refs['editor_content']: ui_refs['editor_content'].value = content
+        
+        if ui_refs['save_status']: ui_refs['save_status'].set_text("")
 
-    if ui_refs['review_panel']:
-        ui_refs['review_panel'].clear()
-        report = chapter.get('review_report', '')
-        with ui_refs['review_panel']:
-            if report: ui.markdown(report).classes('w-full text-sm p-2')
-            else: ui.label("暂无审稿记录").classes('text-grey italic p-2')
-        if report and ui_refs['right_tabs']: ui_refs['right_tabs'].set_value(ui_refs['tab_rev'])
-        elif ui_refs['right_tabs']: ui_refs['right_tabs'].set_value(ui_refs['tab_ctx'])
+        if ui_refs['review_panel']:
+            ui_refs['review_panel'].clear()
+            report = chapter.get('review_report', '')
+            with ui_refs['review_panel']:
+                if report: ui.markdown(report).classes('w-full text-sm p-2')
+                else: ui.label("暂无审稿记录").classes('text-grey italic p-2')
+            if report and ui_refs['right_tabs']: ui_refs['right_tabs'].set_value(ui_refs['tab_rev'])
+            elif ui_refs['right_tabs']: ui_refs['right_tabs'].set_value(ui_refs['tab_ctx'])
 
-    time_info = chapter.get('time_info', {"label": "未知", "events": []})
-    if ui_refs['time_label']: ui_refs['time_label'].value = time_info.get('label', '未知')
-    if ui_refs['time_events']: 
-        events = time_info.get('events', [])
-        ui_refs['time_events'].value = "\n".join(events) if isinstance(events, list) else str(events)
+        time_info = chapter.get('time_info', {"label": "未知", "events": []})
+        if ui_refs['time_label']: ui_refs['time_label'].value = time_info.get('label', '未知')
+        if ui_refs['time_events']: 
+            events = time_info.get('events', [])
+            ui_refs['time_events'].value = "\n".join(events) if isinstance(events, list) else str(events)
 
-    update_char_count()
-    if app_state.refresh_sidebar: app_state.refresh_sidebar()
+        update_char_count()
+        if app_state.refresh_sidebar: app_state.refresh_sidebar()
+        
+    finally:
+        # 3. 【核心修复】关闭加载锁
+        # 使用 asyncio.sleep(0) 让出控制权，确保 UI 更新事件处理完毕后再解锁
+        await asyncio.sleep(0.1)
+        is_loading = False
 
-# 手动保存（完整版：含RAG更新和摘要生成）
 async def save_current_chapter():
     global auto_save_timer
     if auto_save_timer: auto_save_timer.cancel()
@@ -261,21 +259,15 @@ async def save_current_chapter():
     }
     
     ui.notify('正在执行完整保存...', type='info')
-    
-    # 1. 基础保存
     await run.io_bound(manager.save_chapter_content, chapter['id'], new_content)
+    # 【新增】创建历史快照
+    await run.io_bound(manager.create_chapter_snapshot, chapter['id'], new_content)
     await run.io_bound(manager.save_structure, app_state.structure)
-    
-    # 2. 更新 RAG 记忆 (耗时)
     await run.io_bound(memory.add_chapter_memory, chapter['id'], new_content)
     
     ui.notify('✅ 保存成功！记忆库已更新。', type='positive')
-    if ui_refs['save_status']: 
-        now_str = datetime.now().strftime("%H:%M:%S")
-        ui_refs['save_status'].set_text(f"✅ 完整保存 ({now_str})")
-        ui.timer(3.0, lambda: ui_refs['save_status'].set_text('') if ui_refs['save_status'] else None, once=True)
+    if ui_refs['save_status']: ui_refs['save_status'].set_text("✅ 已完整保存")
 
-    # 3. 后台更新摘要
     current_client = ui.context.client
     async def background_update_summaries(chap_id, text, client):
         summary = await run.io_bound(manager.update_chapter_summary, chap_id, text)
@@ -330,6 +322,42 @@ async def generate_content():
         update_char_count()
         ui.notify('生成完毕！', type='positive')
 
+async def open_history_dialog():
+    chapter = app_state.get_current_chapter()
+    if not chapter: return
+
+    snapshots = await run.io_bound(manager.get_chapter_snapshots, chapter['id'])
+    
+    with ui.dialog() as dialog, ui.card().classes('w-2/3 h-3/4'):
+        ui.label(f'🕰️ 第{chapter["id"]}章 - 历史版本快照').classes('text-h6')
+        ui.label('点击“恢复”将覆盖当前编辑器内容（请先保存当前版本！）').classes('text-red-500 text-sm font-bold')
+        
+        with ui.scroll_area().classes('w-full flex-grow border p-2'):
+            if not snapshots:
+                ui.label('暂无历史快照').classes('text-grey italic w-full text-center mt-10')
+            
+            for snap in snapshots:
+                with ui.card().classes('w-full mb-2 bg-grey-1'):
+                    with ui.row().classes('w-full justify-between items-center'):
+                        ui.label(f"📅 {snap['time']}").classes('font-mono font-bold text-blue-800')
+                        
+                        async def restore(f=snap['filename']):
+                            # 读取文件内容
+                            def read_file():
+                                with open(f, 'r', encoding='utf-8') as file: return file.read()
+                            content = await run.io_bound(read_file)
+                            ui_refs['editor_content'].value = content
+                            update_char_count()
+                            dialog.close()
+                            ui.notify(f'已恢复至 {snap["time"]} 版本', type='positive')
+
+                        ui.button('恢复此版本', on_click=restore).props('size=sm color=red outline')
+                    
+                    ui.label(snap['preview']).classes('text-sm text-grey-600 mt-1 truncate')
+
+        ui.button('关闭', on_click=dialog.close).props('flat w-full')
+    dialog.open()
+
 async def export_novel():
     ui.notify('正在打包全书...', spinner=True)
     full_text = await run.io_bound(backend.export_full_novel, manager)
@@ -382,30 +410,21 @@ async def open_state_audit_dialog():
     content = ui_refs['editor_content'].value
     if not content or len(content) < 50: ui.notify('正文太短', type='warning'); return
     ui.notify('正在审计世界状态...', spinner=True)
-    
     summary = {
         "existing_chars": [c['name'] for c in app_state.characters],
         "existing_items": [i['name'] for i in app_state.items],
         "existing_locs": [l['name'] for l in app_state.locations]
     }
     res = await run.io_bound(backend.sync_analyze_state, content, json.dumps(summary, ensure_ascii=False))
-    
     try:
         clean = res.replace("```json", "").replace("```", "").strip()
         start, end = clean.find('{'), clean.rfind('}')
         if start == -1: raise ValueError
         changes = json.loads(clean[start:end+1])
-        
         with ui.dialog() as d, ui.card().classes('w-2/3 h-3/4'):
             ui.label('🌍 状态结算单').classes('text-h6')
             with ui.scroll_area().classes('w-full flex-grow border p-2'):
-                # 【修改】增加 loc_connections 键
-                selected = {
-                    "char_updates":[], "item_updates":[], "new_chars":[], 
-                    "new_items":[], "new_locs":[], "relation_updates":[],
-                    "loc_connections": [] # <--- 新增
-                }
-                
+                selected = {"char_updates":[], "item_updates":[], "new_chars":[], "new_items":[], "new_locs":[], "relation_updates":[], "loc_connections": []}
                 def render_sec(title, key, items, fmt):
                     if items:
                         ui.label(title).classes('font-bold mt-2 text-blue-600')
@@ -415,7 +434,6 @@ async def open_state_audit_dialog():
                                 if e.value: selected[k].append(x)
                                 else: selected[k].remove(x)
                             ui.checkbox(fmt(it), value=True, on_change=chk).classes('text-sm')
-
                 render_sec("👤 人物变更", "char_updates", changes.get('char_updates', []), lambda x: f"{x['name']} [{x['field']}] -> {x['new_value']}")
                 render_sec("🕸️ 关系变更", "relation_updates", changes.get('relation_updates', []), lambda x: f"{x['source']}->{x['target']}: {x['type']}")
                 render_sec("🗺️ 地图连接", "loc_connections", changes.get('loc_connections', []), lambda x: f"{x['source']} ↔️ {x['target']}")
@@ -423,31 +441,24 @@ async def open_state_audit_dialog():
                 render_sec("🆕 新人物", "new_chars", changes.get('new_chars', []), lambda x: f"[新] {x['name']} ({x.get('role','')})")
                 render_sec("🆕 新物品", "new_items", changes.get('new_items', []), lambda x: f"[新] {x['name']} ({x.get('type','')})")
                 render_sec("🆕 新地点", "new_locs", changes.get('new_locs', []), lambda x: f"[新] {x['name']} ({x.get('desc','')[:20]}...)")
-
             async def apply():
                 from . import settings
                 logs = await run.io_bound(backend.apply_state_changes, manager, selected)
                 app_state.characters = await run.io_bound(manager.load_characters)
                 app_state.items = await run.io_bound(manager.load_items)
                 app_state.locations = await run.io_bound(manager.load_locations)
-                
-                # 刷新所有设定 UI
                 settings.refresh_char_ui()
                 settings.refresh_item_ui()
-                settings.refresh_loc_ui() # 刷新地图
-                
+                settings.refresh_loc_ui()
                 d.close()
                 ui.notify(f'应用 {len(logs)} 项变更', type='positive')
-            
             ui.button('确认执行', on_click=apply).props('color=green')
         d.open()
-    except Exception as e: 
-        print(f"解析错误: {e}")
-        ui.notify('解析失败，请检查控制台日志', type='negative')
+    except: ui.notify('解析失败', type='negative')
 
-# ================= UI 构建函数 =================
-
+# ================= UI 构建函数 (保持不变) =================
 def create_writing_tab():
+    # ... (保持原有的 create_writing_tab 代码) ...
     with ui.splitter(value=75).classes('w-full h-full') as splitter:
         with splitter.before:
             with ui.column().classes('w-full h-full p-4'):
@@ -462,11 +473,12 @@ def create_writing_tab():
                 with ui.row().classes('items-center'):
                     ui.button('🚀 生成', on_click=generate_content).props('color=primary')
                     ui.button('💾 保存', on_click=save_current_chapter).props('color=green').tooltip('完整保存：更新记忆库和摘要')
+                    # 【新增】历史按钮
+                    ui.button('🕰️ 历史', on_click=open_history_dialog).props('color=grey outline').tooltip('查看历史版本快照')
                     ui.button('🌍 结算', on_click=open_state_audit_dialog).props('color=blue outline')
                     ui.button('✨ 重绘', on_click=open_rewrite_dialog).props('color=purple outline')
                     ui.button('🔍 审稿', on_click=open_review_dialog).props('color=orange outline')
                     
-                    # 状态显示区域
                     with ui.column().classes('ml-4 gap-0'):
                         ui_refs['char_count'] = ui.label('字数: 0').classes('text-grey-7 text-xs')
                         ui_refs['save_status'] = ui.label('').classes('text-xs font-bold')
@@ -474,7 +486,7 @@ def create_writing_tab():
                 ui_refs['editor_content'] = ui.textarea(label='正文') \
                     .classes('w-full h-full font-mono main-editor') \
                     .props('rows=20 borderless spellcheck="false" input-style="line-height: 2.0; font-size: 16px;"') \
-                    .on_value_change(handle_text_change) # 绑定处理函数
+                    .on_value_change(handle_text_change)
         
         with splitter.after:
             with ui.column().classes('w-full h-full p-0 bg-blue-50'):

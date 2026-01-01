@@ -9,6 +9,7 @@ venv/
 # 用户数据 (小说内容、向量库、图片等)
 MyNovel_Data/
 chroma_db/
+data/
 
 # 配置文件 (含密钥，不提交)
 config.json

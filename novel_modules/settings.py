@@ -581,6 +581,16 @@ def refresh_config_ui():
                     ui.textarea(value=prompts.get(key, '')) \
                         .on_value_change(lambda e, k=key: prompts.update({k: e.value})) \
                         .classes('w-full').props('rows=3 input-style="font-size: 13px"')
+        # 4. 🛡️ 备份与安全 (新增)
+        with ui.expansion('🛡️ 备份与安全 (Backup & Security)', icon='security').classes('w-full bg-grey-1 mt-2'):
+            with ui.column().classes('w-full p-2'):
+                ui.label('自动备份设置 (全项目打包)').classes('text-sm font-bold')
+                # 默认 30 分钟
+                ui.number('自动备份间隔 (分钟)', value=local_cfg.get('backup_interval', 30), min=0, max=1440) \
+                    .bind_value(local_cfg, 'backup_interval').classes('w-full') \
+                    .tooltip('设置为 0 则关闭自动备份')
+                
+                ui.label('💡 提示：每次点击“保存”按钮时，系统会自动为当前章节创建“历史快照”。').classes('text-xs text-grey-600 mt-1')
 
         # 保存按钮
         async def save_config():
@@ -706,5 +716,47 @@ def open_global_search_dialog():
         with ui.row().classes('w-full justify-end mt-2 bg-grey-1 p-2 rounded'):
             ui.button('关闭', on_click=dialog.close).props('flat color=grey')
             ui.button('执行替换', icon='save_as', on_click=perform_replace).props('color=red')
+
+    dialog.open()
+
+# ================= 灵感百宝箱 =================
+
+def open_inspiration_dialog():
+    with ui.dialog() as dialog, ui.card().classes('w-2/3 h-3/4'):
+        ui.label('🎲 灵感百宝箱').classes('text-h6')
+        
+        # 结果展示区 (共用)
+        result_area = ui.textarea(placeholder='生成的灵感会显示在这里...').classes('w-full flex-grow font-mono bg-grey-1').props('readonly')
+        
+        async def do_gen(key):
+            result_area.value = "🔮 正在施法..."
+            # 如果是剧情灵感，传入世界观作为上下文
+            ctx = app_state.settings.get('world_view', '') if 'plot' in key else ""
+            res = await run.io_bound(manager.generate_ideas, key, ctx)
+            result_area.value = res
+
+        with ui.tabs().classes('w-full') as tabs:
+            t_name = ui.tab('起名大全')
+            t_plot = ui.tab('剧情脑洞')
+        
+        with ui.tab_panels(tabs, value=t_name).classes('w-full'):
+            with ui.tab_panel(t_name):
+                with ui.row().classes('w-full gap-2 flex-wrap'):
+                    ui.button('👤 东方人名', on_click=lambda: do_gen('name_char_cn')).props('outline color=purple')
+                    ui.button('🧙‍♂️ 西幻人名', on_click=lambda: do_gen('name_char_en')).props('outline color=indigo')
+                    ui.button('🏰 宗派组织', on_click=lambda: do_gen('name_org')).props('outline color=blue')
+                    ui.button('⚔️ 功法武技', on_click=lambda: do_gen('name_skill')).props('outline color=cyan')
+                    ui.button('💎 法宝丹药', on_click=lambda: do_gen('name_item')).props('outline color=teal')
+            
+            with ui.tab_panel(t_plot):
+                with ui.row().classes('w-full gap-2'):
+                    ui.button('⚡ 突发转折', on_click=lambda: do_gen('plot_twist')).props('color=orange icon=flash_on')
+                    ui.button('💍 金手指设定', on_click=lambda: do_gen('gold_finger')).props('color=amber icon=stars')
+                
+                ui.label('提示：剧情生成会参考您当前的“世界观”设定。').classes('text-xs text-grey mt-2')
+
+        with ui.row().classes('w-full justify-end mt-4'):
+            ui.button('关闭', on_click=dialog.close).props('flat')
+            ui.button('复制结果', on_click=lambda: ui.run_javascript(f'navigator.clipboard.writeText(`{result_area.value}`)') and ui.notify('已复制')).props('color=primary')
 
     dialog.open()

@@ -3,6 +3,9 @@ import os
 import chromadb
 from chromadb.utils import embedding_functions
 from openai import OpenAI
+import shutil # <--- 新增
+import glob   # <--- 新增
+from datetime import datetime # <--- 必须加这一行！
 
 # ================= 配置加载 =================
 def load_config():
@@ -377,6 +380,107 @@ class NovelManager:
         if 'loc' in updated_files: self.save_locations(locs)
         
         return f"已在 {len(target_items)} 处完成替换"
+    
+    # 1. 创建全项目备份 (ZIP)
+    def create_project_backup(self, backup_dir="backups"):
+        try:
+            if not os.path.exists(backup_dir): os.makedirs(backup_dir)
+            
+            # 生成带时间戳的文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"novel_backup_{timestamp}"
+            archive_path = os.path.join(backup_dir, filename)
+            
+            # 打包 data 目录
+            if os.path.exists("data"):
+                shutil.make_archive(archive_path, 'zip', "data")
+                
+                # 清理旧备份 (只保留最近 20 个)
+                backups = sorted(glob.glob(os.path.join(backup_dir, "*.zip")))
+                if len(backups) > 20:
+                    for b in backups[:-20]:
+                        try: os.remove(b)
+                        except: pass
+                return f"已备份: {filename}.zip"
+            return "数据目录不存在，跳过备份"
+        except Exception as e:
+            return f"备份失败: {str(e)}"
+
+    # 2. 创建章节快照 (History Snapshot)
+    def create_chapter_snapshot(self, chapter_id, content):
+        try:
+            snapshot_dir = os.path.join("data", "snapshots", str(chapter_id))
+            if not os.path.exists(snapshot_dir): os.makedirs(snapshot_dir)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filepath = os.path.join(snapshot_dir, f"{timestamp}.txt")
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            # 单章只保留最近 50 个快照，防止文件爆炸
+            files = sorted(glob.glob(os.path.join(snapshot_dir, "*.txt")))
+            if len(files) > 50:
+                for f in files[:-50]:
+                    try: os.remove(f)
+                    except: pass
+        except Exception as e:
+            print(f"Snapshot error: {e}")
+
+    # 3. 获取章节快照列表
+    def get_chapter_snapshots(self, chapter_id):
+        snapshot_dir = os.path.join("data", "snapshots", str(chapter_id))
+        if not os.path.exists(snapshot_dir): return []
+        
+        snapshots = []
+        files = sorted(glob.glob(os.path.join(snapshot_dir, "*.txt")), reverse=True)
+        for f in files:
+            ts_str = os.path.basename(f).replace(".txt", "")
+            try:
+                dt = datetime.strptime(ts_str, "%Y%m%d_%H%M%S")
+                display_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                display_time = ts_str
+            
+            try:
+                with open(f, 'r', encoding='utf-8') as file:
+                    preview = file.read(100).replace("\n", " ") + "..."
+            except: preview = "无法读取内容"
+                
+            snapshots.append({"filename": f, "time": display_time, "preview": preview, "raw_ts": ts_str})
+        return snapshots
+    # ================= 🎲 灵感生成 (新增) =================
+
+    def generate_ideas(self, type_key, context=""):
+        # 1. 定义提示词模板
+        prompts = {
+            "name_char_cn": "请生成 10 个好听的中文玄幻/古风人名，包含男女，格式如：叶凡、姬紫月。只返回名字，用逗号分隔。",
+            "name_char_en": "请生成 10 个西幻风格的人名，格式如：亚瑟·潘德拉贡。只返回名字，用逗号分隔。",
+            "name_org": "请生成 10 个霸气的宗派或组织名称，如：魂殿、炸天帮。只返回名字，用逗号分隔。",
+            "name_skill": "请生成 10 个炫酷的功法或武技名称，如：佛怒火莲、大荒囚天指。只返回名字，用逗号分隔。",
+            "name_item": "请生成 10 个传说级法宝或丹药名称，只返回名字，用逗号分隔。",
+            "plot_twist": f"基于当前世界观：{context[:200]}...，请构思 3 个意想不到的剧情转折或突发事件，用于打破当前的平淡剧情。每个点子 50 字以内。",
+            "gold_finger": "请脑洞大开，生成 5 个独特且爽点十足的网文“金手指”或“系统”设定。简短描述。"
+        }
+        
+        prompt = prompts.get(type_key, "请随机生成一些灵感。")
+        
+        # 2. 调用 LLM (复用已有的 sync_call_llm，注意这里其实应该用异步，但为了代码简单复用 io_bound)
+        # 这里我们临时构造一个 system prompt
+        sys_prompt = "你是一个网文灵感助手。请只返回请求的内容，不要废话。"
+        
+        try:
+            # 使用已有的 client
+            if not client: return "错误：未配置 API Key"
+            
+            response = client.chat.completions.create(
+                model=CFG['models'].get('writer', 'gpt-3.5-turbo'), # 借用 writer 模型
+                messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
+                temperature=0.9 # 灵感需要高创造性
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"生成失败: {str(e)}"
 
 # ================= 向量库管理器 (RAG) =================
 class MemoryManager:
