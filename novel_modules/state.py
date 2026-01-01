@@ -30,6 +30,8 @@ class AppState:
         self.refresh_sidebar = None
         self.refresh_total_word_count = None
 
+        self.current_volume_id = 1 # 默认选中第一卷
+
     def get_current_chapter(self):
         if not self.structure: return None
         if self.current_chapter_idx >= len(self.structure):

@@ -262,10 +262,7 @@ async def main_page():
 
             # --- Tab 4: 架构师 ---
             with ui.tab_panel(tab_arch).classes('h-full w-full p-4 flex flex-col'):
-                ui.label('🏗️ 批量大纲生成').classes('text-h6 shrink-0')
-                theme_input = ui.textarea(label='后续剧情走向').classes('w-full')
-                count_slider = ui.slider(min=3, max=10, value=5).props('label-always')
-                ui.button('开始规划', on_click=lambda: architect.run_architect(theme_input, count_slider)).props('color=purple icon=psychology')
+                architect.create_architect_ui()
 
             # --- Tab 5: 时间轴 ---
             with ui.tab_panel(tab_timeline).classes('h-full w-full p-4 flex flex-col'):
