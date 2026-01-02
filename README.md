@@ -138,6 +138,7 @@ ai_novel_studio/
 
 ## 🤝 贡献与反馈
 这是一个个人开发的辅助写作工具，如果你有好的想法或发现了 Bug，欢迎提交 Issue 或 Pull Request！
+
 **To-Do List**:
 -  增加 epub/txt 导出功能
 -  支持本地 LLM (Ollama) 接入
