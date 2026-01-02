@@ -1,6 +1,6 @@
 # novel_modules/bookshelf.py
 from nicegui import ui
-from .state import app_state, library
+from .state import app_state, library,ui_refs
 import backend
 
 def open_bookshelf_dialog():

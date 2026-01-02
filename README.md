@@ -45,7 +45,7 @@
 
 ### 1. 克隆项目
 ```bash
-git clone [https://github.com/your-username/ai-novel-studio.git](https://github.com/your-username/ai-novel-studio.git)
+git clone https://github.com/cannotgetaname/ai_novel_studio.git
 cd ai-novel-studio
 ```
 ### 2. 创建虚拟环境 (推荐)
@@ -64,10 +64,16 @@ pip install -r requirements.txt
 ```
 *注意*: 首次运行时，ChromaDB 可能会下载 embedding 模型，请确保网络通畅(可能需要科学上网)。
 
-### 4. 启动应用
+### 4. 配置信息
+复制config.example.json为config.json并填入自己的api-key
+
+
+### 5. 启动应用
 ```bash
+
 python main.py
 ```
+
 ---
 ## 🚀 快速上手
 1. **配置 API**:
