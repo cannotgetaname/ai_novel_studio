@@ -839,12 +839,19 @@ class NovelManager:
                 
             # === Case 2: 分卷节点 ===
             if str(node_id).startswith('vol_'):
-                real_id = node_id.replace('vol_', '')
-                # 注意类型转换：ID可能是字符串也可能是整数，这里做模糊匹配
+                # 【修复】只替换第一个 'vol_'，或者直接用切片
+                # 错误写法: real_id = node_id.replace('vol_', '') 
+                # 正确写法: 
+                real_id = node_id.replace('vol_', '', 1) 
+                
+                # 或者更稳妥的切片写法 (因为前缀固定长度是4)
+                # real_id = node_id[4:] 
+
+                # 查找分卷数据
                 vol_data = next((v for v in app_state.volumes if str(v['id']) == str(real_id)), None)
                 
                 if not vol_data: 
-                    return 'unknown', safe_ctx, {} # <--- 修复点：返回 safe_ctx
+                    return 'unknown', safe_ctx, {}
                 
                 ctx = {
                     'self_info': vol_data.get('desc', '（该分卷暂无详细描述）'),
@@ -854,7 +861,9 @@ class NovelManager:
                 
             # === Case 3: 章节节点 ===
             if str(node_id).startswith('chap_'):
-                real_id = node_id.replace('chap_', '')
+                # 【修复】同理，只替换第一个 'chap_'
+                real_id = node_id.replace('chap_', '', 1)
+                
                 chap_data = next((c for c in app_state.structure if str(c['id']) == str(real_id)), None)
                 
                 if not chap_data: 

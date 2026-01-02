@@ -1,7 +1,7 @@
 # novel_modules/bookshelf.py
 from nicegui import ui
 # 【关键修复】必须确保这里导入了 library
-from .state import app_state, library 
+from .state import app_state, library ,ui_refs
 import backend
 
 

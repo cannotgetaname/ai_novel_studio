@@ -94,9 +94,23 @@ class AppState:
 
 # 实例化单例
 app_state = AppState()
-# 导出 manager 和 memory 供其他模块使用 (注意：其他模块需通过 app_state.manager 访问，而不是 import manager)
-manager = app_state.manager 
-memory = app_state.memory
+# ================= 核心修复：动态代理 =================
+# 不要直接赋值 manager = app_state.manager，因为那样是“静态”的。
+# 我们创建一个代理类，每次被调用时，它都会去 app_state 里找最新的对象。
+
+class DynamicProxy:
+    def __init__(self, attr_name):
+        self.attr_name = attr_name
+        
+    def __getattr__(self, name):
+        # 1. 获取当前的 manager 或 memory 对象
+        current_obj = getattr(app_state, self.attr_name)
+        # 2. 在当前对象上获取方法或属性（如 load_chapter_content）
+        return getattr(current_obj, name)
+
+# 使用代理替代原始对象
+manager = DynamicProxy('manager')
+memory = DynamicProxy('memory')
 
 # UI 引用字典
 ui_refs = {
