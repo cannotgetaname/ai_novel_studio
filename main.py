@@ -6,6 +6,8 @@ from nicegui import ui, run
 import backend
 from novel_modules.state import app_state, ui_refs, manager
 from novel_modules import writing, settings, architect, timeline
+from novel_modules import outline_ui  # <--- 新引入
+from novel_modules import bookshelf # <--- 引入
 
 @ui.page('/')
 async def main_page():
@@ -87,6 +89,18 @@ async def main_page():
 
     # --- 4.2 Left Drawer (左侧边栏) ---
     with ui.left_drawer(value=True).classes('bg-blue-50 flex flex-col') as drawer:
+        # === 新增：书架入口区 ===
+        with ui.column().classes('w-full p-2 mb-2 bg-purple-100 rounded border border-purple-200'):
+            ui.label('当前作品:').classes('text-xs text-purple-600 font-bold')
+            # 绑定显示当前书名
+            book_label = ui.label().bind_text_from(app_state, 'current_book_name') \
+                .classes('text-lg font-bold text-purple-900 truncate w-full')
+            
+            ui.button('📚 切换/管理书籍', on_click=bookshelf.open_bookshelf_dialog) \
+                .props('size=sm color=purple icon=swap_horiz w-full')
+                
+        ui.separator().classes('mb-2')
+        
         ui.label('📚 章节目录').classes('text-h6 q-mb-md')
         
         with ui.card().classes('w-full q-mb-sm bg-white p-2'):
@@ -131,6 +145,7 @@ async def main_page():
 
         # 4.3.1 Tabs 栏 (固定高度)
         with ui.tabs().classes('w-full bg-primary text-white shadow-2 shrink-0') as tabs:
+            # tab_outline = ui.tab('大纲树', icon='account_tree')
             tab_write = ui.tab('写作', icon='edit')
             tab_setting = ui.tab('设定', icon='people')
             t_graph = ui.tab('图谱', icon='hub')

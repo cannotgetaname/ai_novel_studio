@@ -9,6 +9,8 @@ from datetime import datetime # <--- 必须加这一行！
 
 import networkx as nx
 
+import hashlib
+
 class WorldGraph:
     def __init__(self, manager):
         self.manager = manager
@@ -160,10 +162,87 @@ def save_global_config(new_config):
     except Exception as e:
         return f"❌ 保存失败: {str(e)}"
 
+# 1. 新增：书架管理器
+class LibraryManager:
+    def __init__(self):
+        # 所有小说默认存放在 'projects' 文件夹下
+        self.base_dir = CFG.get('project_base_dir', 'projects') # 建议读配置，无配置则默认为 'projects'
+        if not os.path.exists(self.base_dir): os.makedirs(self.base_dir)
+
+    def list_books(self):
+        """列出所有项目"""
+        books = []
+        if not os.path.exists(self.base_dir): return []
+        
+        for name in os.listdir(self.base_dir):
+            path = os.path.join(self.base_dir, name)
+            if os.path.isdir(path):
+                # 简单列出文件夹名作为书名
+                books.append({"name": name})
+        return books
+
+    def create_book(self, book_name):
+        """创建新书结构"""
+        # 1. 净化文件名 (防止非法字符)
+        safe_name = "".join([c for c in book_name if c.isalpha() or c.isdigit() or c in (' ', '_', '-')]).strip()
+        if not safe_name: safe_name = f"Book_{datetime.now().strftime('%Y%m%d')}"
+        
+        path = os.path.join(self.base_dir, safe_name)
+        
+        # 2. 检查是否存在
+        if os.path.exists(path): return False, "同名书籍已存在"
+        
+        try:
+            # 3. 创建目录
+            os.makedirs(path)
+            
+            # 4. 初始化该书的基础文件
+            # 这里我们临时实例化一个 NovelManager 来帮我们生成文件结构
+            # 注意：这里传入 project_root 让 Manager 知道去哪里初始化
+            temp_mgr = NovelManager(project_root=path)
+            
+            return True, safe_name
+        except Exception as e:
+            return False, str(e)
+
+    # --- 新增：重命名书籍 ---
+    def rename_book(self, old_name, new_name):
+        """重命名书籍文件夹"""
+        # 1. 检查原书是否存在
+        old_path = os.path.join(self.base_dir, old_name)
+        if not os.path.exists(old_path):
+            return False, "原书籍不存在"
+
+        # 2. 净化新书名 (防止非法字符)
+        safe_new_name = "".join([c for c in new_name if c.isalpha() or c.isdigit() or c in (' ', '_', '-')]).strip()
+        if not safe_new_name: 
+            return False, "新书名无效"
+        
+        new_path = os.path.join(self.base_dir, safe_new_name)
+
+        # 3. 检查新名是否冲突
+        if os.path.exists(new_path):
+            return False, "该书名已存在"
+
+        try:
+            # 4. 执行重命名
+            os.rename(old_path, new_path)
+            
+            # 【重要】如果这正是当前打开的书，也需要更新全局配置里的记录
+            # 这部分逻辑通常在 UI 层处理状态，但在这里我们只负责文件系统
+            
+            return True, safe_new_name
+        except Exception as e:
+            return False, str(e)
 # ================= 小说管理器 (数据层) =================
 class NovelManager:
-    def __init__(self):
-        self.root_dir = CFG.get('project_dir', 'MyNovel_Data')
+    def __init__(self, project_root=None):
+        # 如果传入了路径，就用传入的；否则读配置；最后回退到默认
+        if project_root:
+            self.root_dir = project_root
+        else:
+            self.root_dir = CFG.get('project_dir', 'projects/Default_Book')
+            
         self.chapters_dir = os.path.join(self.root_dir, "chapters")
         self.setting_file = os.path.join(self.root_dir, "setting.json")
         self.char_file = os.path.join(self.root_dir, "characters.json")
@@ -601,15 +680,228 @@ class NovelManager:
             return response.choices[0].message.content
         except Exception as e:
             return f"生成失败: {str(e)}"
+    # --- 大纲树 (Blueprint) 管理 ---
+    def load_outline_tree(self):
+        path = os.path.join(self.root_dir, "outline_tree.json")
+        if not os.path.exists(path):
+            # 初始化根节点，读取现有的 book_summary
+            settings = self.load_settings()
+            root = {
+                "id": "root", "type": "book", "label": "全书总纲", 
+                "desc": settings.get('book_summary', '在此输入核心灵感...'), 
+                "children": []
+            }
+            return [root]
+        with open(path, 'r', encoding='utf-8') as f: return json.load(f)
+
+    def save_outline_tree(self, data):
+        with open(os.path.join(self.root_dir, "outline_tree.json"), 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+
+    # --- 核心：AI 裂变推演 ---
+    def ai_fractal_expand(self, node_data, context_summary):
+        """
+        分形裂变：
+        - Book -> Volumes
+        - Volume -> Chapters
+        """
+        node_type = node_data.get('type', 'book')
+        current_desc = node_data.get('desc', '')
+        
+        # 1. 构造 Prompt
+        if node_type == 'book':
+            target_type = 'volume'
+            prompt = f"【核心灵感】{current_desc}\n【任务】请将这本书拆分为 3-5 个分卷（Volume）。每卷要有明确的剧情阶段目标。"
+        elif node_type == 'volume':
+            target_type = 'chapter'
+            prompt = f"【全书背景】{context_summary[:300]}...\n【当前分卷】{node_data['label']}\n【分卷剧情】{current_desc}\n【任务】请为该分卷规划 5-10 个具体章节（Chapter）。剧情要紧凑，要有起承转合。"
+        else:
+            return "错误：无法继续拆分章节"
+
+        sys_prompt = CFG['prompts']['architect_system']
+        prompt += "\n【格式要求】严格返回JSON列表：[{'label': '标题', 'desc': '详细细纲'}, ...]"
+
+        # 2. 调用 LLM (复用 sync_call_llm)
+        res = sync_call_llm(prompt, sys_prompt, task_type="architect")
+        
+        # 3. 解析结果
+        import uuid
+        try:
+            clean = res.replace("```json", "").replace("```", "").strip()
+            items = json.loads(clean)
+            new_nodes = []
+            for item in items:
+                new_nodes.append({
+                    "id": str(uuid.uuid4())[:8],
+                    "type": target_type,
+                    "label": item['label'],
+                    "desc": item['desc'],
+                    "linked_id": None, # 初始未同步
+                    "children": []
+                })
+            return new_nodes
+        except Exception as e:
+            return f"Error: {e} \nRaw: {res}"
+
+    # --- 核心：同步到正式目录 (The Bridge) ---
+    def sync_node_to_project(self, node):
+        """将蓝图节点转换为正式的分卷或章节"""
+        if node['linked_id']: return "已同步过，跳过创建"
+        
+        import uuid
+        
+        # 1. 同步分卷
+        if node['type'] == 'volume':
+            volumes = self.load_volumes()
+            new_vol_id = f"vol_{str(uuid.uuid4())[:8]}"
+            new_vol = {
+                "id": new_vol_id, 
+                "title": node['label'], 
+                "order": len(volumes) + 1
+            }
+            volumes.append(new_vol)
+            self.save_volumes(volumes)
+            node['linked_id'] = new_vol_id
+            return f"✅ 分卷 '{node['label']}' 已创建"
+
+        # 2. 同步章节
+        elif node['type'] == 'chapter':
+            # 必须找到父级分卷 ID
+            # 注意：这需要前端传参或者在树结构里向上查找，这里简化处理，假设前端传来 parent_vol_id
+            # 实际实现建议在前端调用时，把父节点的 linked_id 传进来
+            pass 
+            # (具体实现在下面的 UI 部分完善)
+    # --- 为 Architect UI 提供树状结构数据 ---
+    def get_novel_tree(self, app_state):
+        """
+        将扁平的 volumes 和 structure 组装成 ui.tree 需要的嵌套格式
+        """
+        tree = []
+        
+        # 1. 根节点
+        root_node = {
+            'id': 'root',
+            'label': '全书总纲 (Root)',
+            'icon': 'menu_book',
+            'children': []
+        }
+        
+        # 2. 构建分卷
+        # 假设 app_state.volumes 是列表 [{'id': 1, 'title': '...'}, ...]
+        # 假设 app_state.structure 是列表 [{'id': 1, 'volume_id': 1, 'title': '...'}, ...]
+        
+        for vol in app_state.volumes:
+            vol_node = {
+                'id': f"vol_{vol['id']}", # 加上前缀防止ID冲突
+                'label': vol['title'],
+                'icon': 'inventory_2',
+                'children': [],
+                '_raw': vol # 暂存原始数据方便后续获取
+            }
+            
+            # 3. 构建该卷下的章节
+            vol_chapters = [c for c in app_state.structure if str(c.get('volume_id')) == str(vol['id'])]
+            for chap in vol_chapters:
+                chap_node = {
+                    'id': f"chap_{chap['id']}",
+                    'label': chap['title'],
+                    'icon': 'article',
+                    '_raw': chap
+                }
+                vol_node['children'].append(chap_node)
+            
+            root_node['children'].append(vol_node)
+            
+        tree.append(root_node)
+        return tree
+
+    # --- 获取节点上下文 (用于右侧面板渲染) ---
+    def get_node_context(self, node_id, app_state):
+        """
+        返回: (node_type, context_dict, raw_data)
+        """
+        # 定义默认的安全返回 (兜底策略)
+        safe_ctx = {
+            'self_info': '暂无详细信息 (可能是未同步的节点或数据已变更)',
+            'parent_info': None
+        }
+        
+        try:
+            settings = self.load_settings()
+            
+            # === Case 1: 根节点 ===
+            if node_id == 'root':
+                ctx = {
+                    'self_info': settings.get('book_summary', '暂无全书简介'),
+                    'parent_info': None
+                }
+                return 'root', ctx, {'title': '全书总纲'}
+                
+            # === Case 2: 分卷节点 ===
+            if str(node_id).startswith('vol_'):
+                real_id = node_id.replace('vol_', '')
+                # 注意类型转换：ID可能是字符串也可能是整数，这里做模糊匹配
+                vol_data = next((v for v in app_state.volumes if str(v['id']) == str(real_id)), None)
+                
+                if not vol_data: 
+                    return 'unknown', safe_ctx, {} # <--- 修复点：返回 safe_ctx
+                
+                ctx = {
+                    'self_info': vol_data.get('desc', '（该分卷暂无详细描述）'),
+                    'parent_info': f"**全书目标**：\n{settings.get('book_summary', '')[:100]}..."
+                }
+                return 'volume', ctx, vol_data
+                
+            # === Case 3: 章节节点 ===
+            if str(node_id).startswith('chap_'):
+                real_id = node_id.replace('chap_', '')
+                chap_data = next((c for c in app_state.structure if str(c['id']) == str(real_id)), None)
+                
+                if not chap_data: 
+                    return 'unknown', safe_ctx, {} # <--- 修复点：返回 safe_ctx
+                
+                # 找父级分卷信息
+                parent_vol = next((v for v in app_state.volumes if str(v['id']) == str(chap_data.get('volume_id'))), None)
+                parent_title = parent_vol['title'] if parent_vol else "未知分卷"
+                parent_desc = parent_vol.get('desc', parent_title) if parent_vol else ""
+                
+                ctx = {
+                    'self_info': chap_data.get('outline', '暂无大纲'),
+                    'parent_info': f"**所属分卷**：{parent_title}\n**分卷目标**：{parent_desc[:100]}..."
+                }
+                return 'chapter', ctx, chap_data
+                
+            # === Case 4: 未知/兜底 ===
+            return 'unknown', safe_ctx, {}
+
+        except Exception as e:
+            print(f"Error in get_node_context: {e}")
+            return 'error', safe_ctx, {}
 
 # ================= 向量库管理器 (RAG) =================
 class MemoryManager:
-    def __init__(self):
-        self.root_dir = CFG.get('project_dir', 'MyNovel_Data')
-        db_path = os.path.join(self.root_dir, "chroma_db")
-        self.client = chromadb.PersistentClient(path=db_path)
+    def __init__(self, book_name="default"):
+        self.root_dir = "chroma_db_storage" 
+        if not os.path.exists(self.root_dir): os.makedirs(self.root_dir)
+        
+        self.client = chromadb.PersistentClient(path=self.root_dir)
         self.embedding_fn = embedding_functions.DefaultEmbeddingFunction()
-        self.collection = self.client.get_or_create_collection(name="novel_memory", embedding_function=self.embedding_fn)
+        
+        # 【修复核心】使用 MD5 哈希生成合法的 Collection 名称
+        # 无论 book_name 是中文、英文还是特殊字符，hash 永远是合法的字母数字组合
+        hash_object = hashlib.md5(book_name.encode('utf-8'))
+        hex_dig = hash_object.hexdigest() # 生成类似 'e10adc3949ba59abbe56e057f20f883e'
+        
+        # 加上前缀，确保以字母开头 (ChromaDB 要求)
+        safe_name = f"novel_{hex_dig}"
+        
+        # 打印一下，方便调试看到中文书名对应什么哈希
+        print(f"[RAG] 书籍 '{book_name}' 对应向量库: {safe_name}")
+
+        self.collection = self.client.get_or_create_collection(
+            name=safe_name, 
+            embedding_function=self.embedding_fn
+        )
 
     def add_chapter_memory(self, chapter_id, content):
         self.delete_chapter_memory(chapter_id)

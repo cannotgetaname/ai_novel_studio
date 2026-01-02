@@ -10,6 +10,8 @@ venv/
 MyNovel_Data/
 chroma_db/
 data/
+chroma_db_storage/
+projects/
 
 # 配置文件 (含密钥，不提交)
 config.json

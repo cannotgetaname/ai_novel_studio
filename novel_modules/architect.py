@@ -3,189 +3,356 @@ import json
 from .state import app_state, manager, ui_refs
 from backend import CFG
 
-# 临时存储生成的剧情卡片
-generated_plots = []
-
 def create_architect_ui():
-    # 使用 full height column
-    with ui.column().classes('w-full h-full p-4 gap-4'):
+    # 使用 Splitter，设定更舒适的默认比例
+    with ui.splitter(value=22, limits=(15, 40)).classes('w-full h-full bg-gray-50') as splitter:
         
-        # ================= 1. 顶部：推演控制台 =================
-        with ui.card().classes('w-full p-4 bg-grey-1 border shrink-0'):
-            with ui.row().classes('items-center gap-2 mb-2'):
-                ui.icon('psychology', color='deep-purple', size='md')
-                ui.label('剧情推演引擎 (Architect Pro)').classes('text-lg font-bold text-deep-purple')
-                ui.label('· 基于 DeepSeek-R1').classes('text-xs text-grey-6 bg-white px-2 rounded border')
+        # --- 拖拽条样式优化 (更隐形但易用) ---
+        with splitter.separator:
+            with ui.column().classes('w-1 h-full bg-gray-200 hover:bg-purple-400 transition-colors cursor-col-resize items-center justify-center'):
+                # 只有鼠标悬停或拖拽时才明显，平时像一条淡淡的分界线
+                pass 
 
-            ui.label('基于“全书梗概”和“世界观图谱”，推演未来的剧情细纲。').classes('text-xs text-grey-6 mb-2')
-            
-            with ui.row().classes('w-full items-start gap-4'):
-                # --- 左侧：引导输入 ---
-                guidance_input = ui.textarea(
-                    label='剧情引导 / 你的期望',
-                    placeholder='例如：主角到达京城，遭遇反派挑衅，准备打脸...（留空则由 AI 自由发挥）'
-                ).classes('w-2/3').props('outlined bg-white')
-                
-                # --- 右侧：参数与启动 ---
-                with ui.column().classes('w-1/3 gap-3'):
-                    # 【修复】使用 Label + Slider 组合，解决显示 {} 的问题
-                    with ui.column().classes('w-full gap-0'):
-                        count_label = ui.label('生成章节数: 3').classes('text-sm font-bold text-purple-800')
-                        chapter_count = ui.slider(min=1, max=10, value=3, step=1) \
-                            .props('color=purple') \
-                            .on_value_change(lambda e: count_label.set_text(f'生成章节数: {e.value}'))
+        # ================= 🌲 左侧：导航树 (侧边栏风格) =================
+        with splitter.before:
+            with ui.column().classes('w-full h-full p-3 bg-white border-r border-gray-200 overflow-auto'):
+                # 顶部标题栏
+                with ui.row().classes('items-center justify-between w-full mb-4 px-1'):
+                    with ui.row().classes('items-center gap-2'):
+                        ui.icon('account_tree', color='purple').classes('text-lg')
+                        ui.label('结构视图').classes('text-sm font-bold text-gray-800')
                     
-                    async def start_deduction():
-                        if not CFG.get('api_key'):
-                            ui.notify('请先配置 API Key', type='negative')
-                            return
-                        await run_plot_deduction(guidance_input.value, chapter_count.value)
+                    ui.button(icon='refresh', on_click=lambda: refresh_tree()) \
+                        .props('flat round dense color=grey size=sm').tooltip('刷新结构')
 
-                    ui.button('🚀 开始推演', on_click=start_deduction) \
-                        .props('color=deep-purple icon=auto_awesome w-full size=lg') \
-                        .classes('shadow-md')
+                # 树容器
+                tree_container = ui.element('div').classes('w-full')
+                
+                def refresh_tree():
+                    tree_container.clear()
+                    data = manager.get_novel_tree(app_state)
+                    
+                    # --- 辅助函数：递归获取所有节点 ID ---
+                    def get_all_ids(nodes):
+                        ids = []
+                        for node in nodes:
+                            ids.append(node['id'])
+                            if node.get('children'):
+                                ids.extend(get_all_ids(node['children']))
+                        return ids
 
-        # ================= 2. 底部：推演结果 (卡片流) =================
-        with ui.row().classes('w-full justify-between items-center mt-2'):
-            ui.label('推演结果 (Result Cards)').classes('text-sm font-bold text-grey-7')
-            ui.button('清空结果', on_click=lambda: ui_refs.get('architect_results').clear() if ui_refs.get('architect_results') else None) \
-                .props('flat size=sm color=grey icon=delete_sweep')
-        
-        # 结果容器 (占满剩余高度，可滚动)
-        results_container = ui.column().classes('w-full flex-grow overflow-auto gap-3 p-1')
-        ui_refs['architect_results'] = results_container
-        
-        # 初始显示空状态
-        with results_container:
-            with ui.column().classes('w-full h-full items-center justify-center text-grey-4'):
-                ui.icon('auto_stories', size='4rem')
-                ui.label('暂无推演结果，请在上方输入引导并开始。').classes('text-lg mt-2')
-
-
-async def run_plot_deduction(guidance, count):
-    container = ui_refs.get('architect_results')
-    if not container: return
-    
-    container.clear()
-    with container:
-        with ui.column().classes('w-full items-center mt-10'):
-            ui.spinner('dots', size='3rem', color='purple')
-            ui.label('DeepSeek 正在疯狂烧脑中...').classes('text-purple animate-pulse font-bold mt-2')
-            ui.label('正在读取世界观、回顾前文摘要、构建逻辑链...').classes('text-xs text-grey')
-    
-    # 1. 准备 Context
-    summary = app_state.settings.get('book_summary', '暂无全书总结')
-    world = app_state.settings.get('world_view', '暂无世界观')
-    
-    # 2. 构造 Prompt (强制 JSON 输出)
-    prompt = f"""
-    【任务】
-    你是一个网文剧情架构师。请基于以下背景，推演接下来的 {count} 个章节的大纲。
-    
-    【世界观】
-    {world[:800]}...
-    
-    【目前剧情进度】
-    {summary}
-    
-    【作者的引导/期望】
-    {guidance}
-    
-    【要求】
-    1. 剧情要有起承转合，符合网文爽点节奏。
-    2. 必须严格按照 JSON 格式返回一个列表，不要Markdown标记，不要废话。
-    3. 格式示例：
-    [
-        {{"title": "第X章 遭遇埋伏", "summary": "主角在...", "pacing": "铺垫", "conflict": "敌强我弱"}},
-        {{"title": "第X章 绝地反击", "summary": "主角使用...", "pacing": "高潮", "conflict": "反杀"}}
-    ]
-    """
-    
-    # 3. 调用 LLM
-    try:
-        # 使用 architect 模型 (建议配置为 deepseek-reasoner)
-        response_text = await run.io_bound(manager.sync_call_llm, prompt, "你是一个只输出JSON的剧情架构师。", "architect")
-        
-        # 清洗数据 (防止 DeepSeek 输出 ```json ... ```)
-        clean_text = response_text.replace("```json", "").replace("```", "").strip()
-        data = json.loads(clean_text)
-        
-        # 4. 渲染卡片
-        container.clear()
-        with container:
-            if not isinstance(data, list):
-                ui.label(f"格式解析错误: {response_text[:100]}...").classes('text-red')
-                return
-
-            for i, chap in enumerate(data):
-                # 每一章的卡片
-                with ui.card().classes('w-full bg-white border-l-4 border-purple-500 shadow-sm hover:shadow-md transition-shadow'):
-                    with ui.row().classes('w-full justify-between items-start'):
-                        # --- 左侧：信息展示 ---
-                        with ui.column().classes('gap-1 flex-grow pr-4'):
-                            with ui.row().classes('items-center gap-2'):
-                                ui.label(chap.get('title', f'新章节')).classes('text-lg font-bold text-grey-9')
-                                
-                                # 节奏标签
-                                pacing = chap.get('pacing', '正常')
-                                color_map = {'高潮': 'red', '爽点': 'orange', '铺垫': 'blue', '日常': 'green'}
-                                tag_color = color_map.get(pacing, 'blue')
-                                ui.badge(pacing, color=tag_color).props('outline')
-                            
-                            # 冲突点
-                            ui.label(f"⚔️ 核心冲突: {chap.get('conflict', '无')}").classes('text-xs text-red-600 font-bold bg-red-50 px-1 rounded self-start')
-                            
-                            # 摘要内容
-                            with ui.expansion('查看详细细纲', icon='article', value=True).classes('w-full text-grey-8').props('dense header-class="text-sm"'):
-                                ui.markdown(chap.get('summary', '')).classes('text-sm leading-relaxed p-2 bg-grey-1 rounded')
+                    with tree_container:
+                        # 1. 创建树组件
+                        tree = ui.tree(data, label_key='label', on_select=lambda e: update_panel(e.value)) \
+                            .props('node-key="id" tick-strategy="none" selected-color="purple"') \
+                            .classes('text-gray-700')
                         
-                        # --- 右侧：采纳按钮 ---
-                        def adopt_chapter(c=chap):
-                            try:
-                                # 1. 确定 Volume ID (如果未设置，默认取最后一个分卷，或者第一卷)
-                                target_vol_id = getattr(app_state, 'current_volume_id', 1)
-                                if not app_state.volumes:
-                                    ui.notify('请先至少创建一个分卷！', type='negative')
-                                    return
-                                    
-                                # 智能查找：如果当前没有选中的卷，就放到最后一卷
-                                if target_vol_id not in [v['id'] for v in app_state.volumes]:
-                                    target_vol_id = app_state.volumes[-1]['id']
+                        # 2. 【关键修复】手动调用 expand() 展开所有节点
+                        # NiceGUI 的 expand() 需要传入节点 ID 列表
+                        all_ids = get_all_ids(data)
+                        tree.expand(all_ids)
+                            
+                refresh_tree()
 
-                                # 2. 创建数据
-                                new_id = len(app_state.structure) + 1
-                                new_chap = {
-                                    "id": new_id,
-                                    "title": c.get('title', '新章节'),
-                                    "volume_id": target_vol_id,
-                                    "content": "",
-                                    "outline": c.get('summary', '') # 自动填入大纲
-                                }
-                                app_state.structure.append(new_chap)
-                                manager.save_structure(app_state.structure)
-                                
-                                # 3. 刷新左侧目录
-                                if hasattr(app_state, 'refresh_sidebar'): 
-                                    app_state.refresh_sidebar()
-                                
-                                ui.notify(f"✅ 已创建: {c['title']}", type='positive')
-                            except Exception as ex:
-                                ui.notify(f"创建失败: {ex}", type='negative')
+        # ================= 🎛️ 右侧：操作控制台 (现代化卡片风格) =================
+        with splitter.after:
+            # 背景色设为极淡的灰色，突出中间的白色卡片
+            panel_container = ui.column().classes('w-full h-full p-6 overflow-auto bg-gray-50')
+            
+            with panel_container:
+                render_empty_state()
 
-                        with ui.column().classes('items-center justify-center min-h-[80px] border-l pl-4'):
-                            ui.button('采纳', icon='add_circle', on_click=adopt_chapter) \
-                                .props('flat color=green size=md stack') \
-                                .tooltip('直接生成到目录树')
+            async def update_panel(node_id):
+                if not node_id: return
+                
+                panel_container.clear()
+                node_type, ctx, raw_data = manager.get_node_context(node_id, app_state)
+                
+                with panel_container:
+                    # 1. 顶部大标题 (Header)
+                    with ui.row().classes('items-center gap-3 mb-6 shrink-0 w-full'):
+                        # 图标容器
+                        icon_bg_map = {'root': 'bg-blue-100', 'volume': 'bg-purple-100', 'chapter': 'bg-green-100'}
+                        icon_color_map = {'root': 'text-blue-600', 'volume': 'text-purple-600', 'chapter': 'text-green-600'}
+                        icon_map = {'root': 'menu_book', 'volume': 'inventory_2', 'chapter': 'article'}
+                        
+                        bg_class = icon_bg_map.get(node_type, 'bg-gray-100')
+                        text_class = icon_color_map.get(node_type, 'text-gray-600')
+                        
+                        with ui.element('div').classes(f'p-3 rounded-xl {bg_class} shadow-sm'):
+                            ui.icon(icon_map.get(node_type, 'help')).classes(f'text-2xl {text_class}')
+                        
+                        with ui.column().classes('gap-0'):
+                            type_map = {'root': '全书规划 (Root)', 'volume': '分卷拆解 (Volume)', 'chapter': '场景细化 (Chapter)'}
+                            ui.label(type_map.get(node_type, node_type)).classes('text-xs font-bold text-gray-500 uppercase tracking-wide')
+                            
+                            title = raw_data.get('title', '未命名') if isinstance(raw_data, dict) else '全书总览'
+                            ui.label(title).classes('text-2xl font-bold text-gray-900 leading-tight')
 
-    except Exception as e:
-        container.clear()
-        with container:
-            with ui.card().classes('w-full bg-red-50 border-red'):
-                ui.label(f"💥 推演过程中发生错误").classes('text-red font-bold')
-                ui.label(str(e)).classes('text-xs text-red-800')
-                with ui.expansion('查看原始返回'):
-                    ui.code(response_text if 'response_text' in locals() else 'No response').classes('text-xs')
+                    # 2. 档案卡 (Info Card) - 【修复：自然展开，去除滚动条】
+                    with ui.card().classes('w-full bg-white border border-gray-100 shadow-sm rounded-xl p-6 mb-8'):
+                        with ui.row().classes('items-center gap-2 mb-3 border-b border-gray-100 pb-2'):
+                            ui.icon('info', size='xs', color='blue-500')
+                            ui.label('当前节点档案').classes('text-sm font-bold text-gray-700')
+                        
+                        # 核心内容：自然文本，无边框，易读
+                        ui.markdown(ctx.get('self_info', '数据加载异常')).classes('text-base text-gray-800 leading-7 prose max-w-none')
+                        
+                        # 上下文：用引用块样式
+                        if ctx['parent_info']:
+                            with ui.element('div').classes('mt-4 p-3 bg-gray-50 rounded-lg border-l-4 border-blue-300'):
+                                ui.label('📌 上下文 / 上级目标').classes('text-xs font-bold text-gray-500 mb-1')
+                                ui.markdown(ctx['parent_info']).classes('text-sm text-gray-600 italic leading-relaxed')
 
-# 兼容接口 (防止 main.py 旧代码报错)
-def run_architect(theme, slider):
-    pass
+                    # 3. 操作区 (Action Area)
+                    # 增加分割标题
+                    with ui.row().classes('items-center gap-2 mb-4 w-full'):
+                        ui.icon('auto_awesome', color='purple').classes('text-lg')
+                        ui.label('AI 剧情推演').classes('text-lg font-bold text-gray-800')
+                        ui.element('div').classes('h-px bg-gray-200 flex-grow ml-2')
+
+                    if node_type == 'root':
+                        render_root_actions(ctx)
+                    elif node_type == 'volume':
+                        render_volume_actions(ctx, raw_data)
+                    elif node_type == 'chapter':
+                        render_chapter_actions(ctx, raw_data)
+
+def render_empty_state():
+    with ui.column().classes('w-full h-full items-center justify-center text-gray-400'):
+        with ui.element('div').classes('p-6 bg-white rounded-full shadow-sm mb-4'):
+             ui.icon('account_tree', size='4rem', color='gray-300')
+        ui.label('请在左侧选择一个节点').classes('text-xl font-bold text-gray-600')
+        ui.label('点击结构树，开始您的分形创作之旅').classes('text-sm text-gray-400')
+
+# ================= 🎮 操作面板 (样式升级) =================
+
+def render_root_actions(ctx):
+    # 使用白色大卡片包裹操作区
+    with ui.card().classes('w-full bg-white shadow-md rounded-xl p-6 gap-6'):
+        # 左右布局：左侧输入，右侧参数
+        with ui.row().classes('w-full gap-8 items-start no-wrap'):
+            # 左侧
+            with ui.column().classes('flex-grow gap-2'):
+                ui.label('核心构思 / 引导').classes('text-sm font-bold text-gray-700')
+                guidance = ui.textarea(placeholder='例如：主角从地球穿越，每隔100章飞升一次...').classes('w-full').props('outlined rows=6')
+                ui.label('越详细的引导，生成的骨架越精准。').classes('text-xs text-gray-400')
+
+            # 右侧参数栏
+            with ui.column().classes('w-1/3 gap-6 min-w-[250px] bg-gray-50 p-4 rounded-lg border border-gray-100'):
+                # 模板选择
+                ui.label('📚 叙事模型').classes('text-xs font-bold text-gray-500')
+                template = ui.select(
+                    ['网文升级流 (换地图)', '英雄之旅 (12步)', '救猫咪 (15节拍)', '无限流 (单元剧)', '三段式 (起承转合)'], 
+                    value='网文升级流 (换地图)'
+                ).classes('w-full').props('outlined dense bg-white')
+                
+                # 滑块
+                ui.separator().classes('bg-gray-200')
+                with ui.column().classes('w-full gap-1'):
+                     with ui.row().classes('justify-between w-full'):
+                        ui.label('分卷数量').classes('text-xs font-bold text-gray-500')
+                        count_label = ui.label('5 卷').classes('text-xs font-bold text-purple-600')
+                     
+                     vol_count = ui.slider(min=3, max=20, value=5, step=1).props('color=purple label-always') \
+                        .on_value_change(lambda e: count_label.set_text(f'{e.value} 卷'))
+
+        # 底部大按钮
+        async def do_plan():
+            prompt = f"""
+            你是一个网文主编。请基于以下信息，为全书规划 {vol_count.value} 个左右的【分卷 (Volumes)】。
+            【全书核心】{ctx['self_info']}
+            【用户引导】{guidance.value}
+            【采用模型】{template.value}
+            要求：JSON格式列表，包含 title, desc。
+            """
+            await call_ai_and_preview(prompt, 'create_volumes')
+            
+        ui.button('生成全书分卷骨架', icon='auto_awesome', on_click=do_plan) \
+            .props('unelevated size=lg color=deep-purple') \
+            .classes('w-full shadow-lg hover:shadow-xl transition-shadow rounded-lg font-bold text-lg')
+
+def render_volume_actions(ctx, vol_data):
+    with ui.card().classes('w-full bg-white shadow-md rounded-xl p-6 gap-6'):
+        with ui.row().classes('w-full gap-8 items-start no-wrap'):
+            # 左侧引导
+            with ui.column().classes('flex-grow gap-2'):
+                ui.label('本卷剧情走向').classes('text-sm font-bold text-gray-700')
+                guidance = ui.textarea(placeholder='例如：主角刚进入宗门，被师兄刁难...').classes('w-full').props('outlined rows=6')
+
+            # 右侧参数
+            with ui.column().classes('w-1/3 gap-5 min-w-[250px] bg-gray-50 p-4 rounded-lg border border-gray-100'):
+                ui.label('🎭 风格与节奏').classes('text-xs font-bold text-gray-500')
+                template = ui.select(['爽文打脸流', '三幕式结构', '悬疑解谜流', '日常种田流'], value='爽文打脸流').classes('w-full').props('outlined dense bg-white')
+                
+                ui.label('📄 预计章节数').classes('text-xs font-bold text-gray-500 mt-2')
+                count = ui.number(value=15, min=1, max=100).classes('w-full').props('outlined dense bg-white suffix="章"')
+        
+        async def do_plan():
+            prompt = f"""
+            你是一个网文架构师。请将【{vol_data['title']}】拆解为 {int(count.value)} 个左右的章节。
+            【本卷目标】{ctx['self_info']}
+            【用户引导】{guidance.value}
+            【风格模型】{template.value}
+            要求：JSON格式列表，包含 title, outline。
+            """
+            await call_ai_and_preview(prompt, 'create_chapters', parent_id=vol_data['id'])
+            
+        ui.button('推演本卷章节细纲', icon='psychology', on_click=do_plan) \
+            .props('unelevated size=lg color=purple') \
+            .classes('w-full shadow-lg hover:shadow-xl transition-shadow rounded-lg font-bold')
+
+def render_chapter_actions(ctx, chap_data):
+    with ui.card().classes('w-full bg-white shadow-md rounded-xl p-6 gap-6'):
+        with ui.row().classes('w-full gap-8 items-start no-wrap'):
+            with ui.column().classes('flex-grow gap-2'):
+                ui.label('本章具体构思').classes('text-sm font-bold text-gray-700')
+                guidance = ui.textarea(value=chap_data.get('outline', ''), placeholder='如果大纲为空，请先补充...').classes('w-full').props('outlined rows=6')
+
+            with ui.column().classes('w-1/3 gap-4 min-w-[250px] bg-gray-50 p-4 rounded-lg border border-gray-100'):
+                with ui.row().classes('justify-between w-full'):
+                    ui.label('场景切分 (Beats)').classes('text-xs font-bold text-gray-500')
+                    scene_label = ui.label('4 个').classes('text-xs font-bold text-indigo-600')
+                
+                scene_count = ui.slider(min=2, max=8, value=4, step=1).props('color=indigo label-always') \
+                    .on_value_change(lambda e: scene_label.set_text(f'{e.value} 个'))
+                
+                ui.label('提示：场景是写作的最小单位，包含地点、人物和冲突。').classes('text-xs text-gray-400 italic leading-tight')
+
+        async def do_plan():
+            prompt = f"""
+            微观剧情设计：将【{chap_data['title']}】拆解为 {scene_count.value} 个具体的【场景】。
+            【本章大纲】{guidance.value}
+            【上级分卷】{ctx['parent_info']}
+            要求：JSON格式列表，包含 scene, desc, est_words。
+            """
+            await call_ai_and_preview(prompt, 'update_outline', target_chap=chap_data)
+            
+        ui.button('生成场景流 (Beat Sheet)', icon='movie_filter', on_click=do_plan) \
+            .props('unelevated size=lg color=indigo') \
+            .classes('w-full shadow-lg hover:shadow-xl transition-shadow rounded-lg font-bold')
+
+# ================= ⚡ 预览窗口 (AI Result) =================
+
+async def call_ai_and_preview(prompt, action_type, **kwargs):
+    # 使用 backdrop-blur 让背景虚化，更高级
+    result_area = ui.dialog().classes('backdrop-blur-sm')
+    
+    # 弹窗本体：增加 rounded-2xl, shadow-2xl
+    with result_area, ui.card().classes('w-3/4 h-5/6 flex flex-col rounded-2xl shadow-2xl p-0 overflow-hidden'):
+        
+        # 1. 顶部 Header (深色背景)
+        with ui.row().classes('w-full items-center justify-between bg-gray-900 text-white p-4 shrink-0'):
+            with ui.row().classes('items-center gap-2'):
+                ui.icon('smart_toy', color='purple-300')
+                ui.label('AI 推演结果').classes('text-lg font-bold')
+            ui.button(icon='close', on_click=result_area.close).props('flat round dense color=white')
+            
+        # 2. 内容区
+        content_wrapper = ui.column().classes('w-full flex-grow relative bg-gray-50')
+        
+        # Loading 状态
+        with content_wrapper:
+            spinner_box = ui.column().classes('absolute-center items-center gap-4')
+            with spinner_box:
+                ui.spinner('dots', size='4rem', color='purple')
+                ui.label('正在疯狂烧脑中...').classes('text-purple-600 font-bold animate-pulse')
+
+        # 结果显示区 (初始隐藏)
+        scroll_area = ui.scroll_area().classes('w-full h-full p-6 hidden')
+        
+        result_area.open()
+        try:
+            res = await run.io_bound(manager.sync_call_llm, prompt, "你是一个只输出JSON的架构师。", "architect")
+            
+            # JSON 解析
+            clean_json = res.replace("```json", "").replace("```", "").strip()
+            start, end = clean_json.find('['), clean_json.rfind(']')
+            if start != -1 and end != -1: clean_json = clean_json[start:end+1]
+            data = json.loads(clean_json)
+            
+            spinner_box.set_visibility(False)
+            scroll_area.set_visibility(True)
+            scroll_area.move(content_wrapper) # 把 scroll_area 移入 wrapper
+            scroll_area.clear()
+            
+            with scroll_area:
+                ui.label(f'🎉 推演成功！生成 {len(data)} 条结果').classes('text-green-600 font-bold text-lg mb-4')
+                
+                # --- 渲染结果列表 ---
+                if action_type == 'create_volumes':
+                    with ui.column().classes('gap-4 w-full'):
+                        for item in data:
+                            with ui.card().classes('w-full bg-white p-4 border-l-4 border-purple-500 shadow-sm'):
+                                ui.label(item.get('title', '无标题')).classes('font-bold text-lg text-gray-800')
+                                ui.markdown(item.get('desc', '')).classes('text-sm text-gray-600 mt-1')
+                    
+                    def apply_vols():
+                        start_id = max([v['id'] for v in app_state.volumes] or [0]) + 1
+                        for i, item in enumerate(data):
+                            app_state.volumes.append({"id": start_id + i, "title": item.get('title', f'分卷 {start_id+i}'), "desc": item.get('desc', '')})
+                        manager.save_volumes(app_state.volumes)
+                        ui.notify('分卷已创建！', type='positive')
+                        result_area.close()
+                    
+                    ui.separator().classes('my-6')
+                    ui.button('✨ 采纳并创建分卷', on_click=apply_vols).props('unelevated size=lg color=green').classes('w-full font-bold shadow-md')
+
+                elif action_type == 'create_chapters':
+                    with ui.column().classes('gap-3 w-full'):
+                        for item in data:
+                            with ui.card().classes('w-full bg-white p-3 border border-gray-200 shadow-sm hover:shadow-md transition-shadow'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.icon('article', color='purple-400')
+                                    ui.label(item.get('title', '无标题')).classes('font-bold text-gray-800')
+                                ui.markdown(item.get('outline', '')).classes('text-sm text-gray-600 mt-1 pl-6')
+
+                    def apply_chaps():
+                        start_id = len(app_state.structure) + 1
+                        vol_id = kwargs['parent_id']
+                        for i, item in enumerate(data):
+                            app_state.structure.append({"id": start_id + i, "title": item.get('title', f'第{start_id+i}章'), "volume_id": vol_id, "content": "", "outline": item.get('outline', '')})
+                        manager.save_structure(app_state.structure)
+                        ui.notify('章节已创建！', type='positive')
+                        result_area.close()
+
+                    ui.separator().classes('my-6')
+                    ui.button('✨ 采纳并创建章节', on_click=apply_chaps).props('unelevated size=lg color=green').classes('w-full font-bold shadow-md')
+
+                elif action_type == 'update_outline':
+                    # 场景流展示
+                    with ui.column().classes('gap-4 w-full'):
+                        for item in data:
+                             with ui.card().classes('w-full bg-white p-4 border-l-4 border-indigo-500 shadow-sm'):
+                                 with ui.row().classes('justify-between w-full'):
+                                     ui.label(item.get('scene', '场景')).classes('font-bold text-indigo-700')
+                                     ui.badge(item.get('est_words', '未知字数'), color='indigo-100').classes('text-indigo-800')
+                                 ui.markdown(item.get('desc', '')).classes('text-sm text-gray-700 mt-2 leading-relaxed')
+
+                    preview_text = "".join([f"### {item.get('scene', '场景')}\n_{item.get('est_words', '未知字数')}_\n\n{item.get('desc', '')}\n\n" for item in data])
+                    
+                    def apply_scenes():
+                        target_chap = kwargs['target_chap']
+                        original = target_chap.get('outline', '')
+                        target_chap['outline'] = (original + ("\n\n---\n\n" if original else "") + preview_text)
+                        manager.save_structure(app_state.structure)
+                        ui.notify('场景流已写入大纲！', type='positive')
+                        result_area.close()
+
+                    ui.separator().classes('my-6')
+                    ui.button('✨ 写入章节大纲', on_click=apply_scenes).props('unelevated size=lg color=green').classes('w-full font-bold shadow-md')
+
+        except Exception as e:
+            spinner_box.set_visibility(False)
+            scroll_area.set_visibility(True)
+            scroll_area.move(content_wrapper)
+            with scroll_area:
+                with ui.card().classes('bg-red-50 border border-red-200 p-6 w-full items-center'):
+                    ui.icon('error_outline', size='4rem', color='red-400')
+                    ui.label('推演遇到了点问题').classes('text-xl font-bold text-red-700 mt-2')
+                    ui.label(str(e)).classes('text-red-500 mt-2 text-center')
+                
+                with ui.expansion('查看原始返回数据').classes('w-full mt-4'):
+                    ui.code(res if 'res' in locals() else 'No response').classes('text-xs')
+
+def run_architect(theme, slider): pass
