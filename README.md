@@ -78,11 +78,12 @@ python main.py
 ## 🚀 快速上手
 1. **配置 API**:
    
-   * 启动后进入 "设定 (Settings)" -> "系统配置"。
+   * 启动后进入 "**设定 (Settings)**" -> "系统配置"。
 
    * 填入你的 DeepSeek API Key 并保存。
 
    * 建议：将 Architect 模型路由设置为 deepseek-reasoner 以获得最佳推演效果
+   * 也可以将config.example.json重命名为config.json并填入key
 2. **创建新书**：
    
    * 点击左上角的 "**书架**" 按钮。
@@ -106,6 +107,8 @@ python main.py
 ## 📂 项目结构
 ```plaintext
 ai_novel_studio/
+├── config.example.json     #配置文件示例
+├── config.json             #配置文件
 ├── main.py                 # 程序入口，UI 主框架
 ├── backend.py              # 核心后端 (文件IO, RAG, LLM调用)
 ├── requirements.txt        # 依赖列表
