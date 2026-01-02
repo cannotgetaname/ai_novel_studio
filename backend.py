@@ -234,6 +234,42 @@ class LibraryManager:
             return True, safe_new_name
         except Exception as e:
             return False, str(e)
+    # --- 新增：删除书籍 ---
+    def delete_book(self, book_name):
+        print(f"[Backend] 正在尝试删除书籍: {book_name}") # <--- 调试日志
+        
+        # 1. 路径检查
+        book_path = os.path.join(self.base_dir, book_name)
+        if not os.path.exists(book_path):
+            return False, "书籍目录不存在"
+
+        try:
+            # 2. 删除物理文件夹
+            import shutil # 再次确保导入
+            shutil.rmtree(book_path)
+            
+            # 3. 删除向量数据库
+            try:
+                import hashlib
+                hash_object = hashlib.md5(book_name.encode('utf-8'))
+                hex_dig = hash_object.hexdigest()
+                collection_name = f"novel_{hex_dig}"
+                
+                db_path = "chroma_db_storage"
+                if os.path.exists(db_path):
+                    # 注意：这里需要新建一个 client 连接来执行删除
+                    client = chromadb.PersistentClient(path=db_path)
+                    client.delete_collection(collection_name)
+                    print(f"[Backend] 向量库 {collection_name} 已删除")
+            except Exception as e:
+                print(f"[Backend] 向量库清理警告: {e}") # 也就是允许向量库删除失败，不影响主流程
+
+            return True, f"《{book_name}》已永久删除"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc() # 打印详细报错
+            return False, f"删除失败: {str(e)}"
 # ================= 小说管理器 (数据层) =================
 class NovelManager:
     def __init__(self, project_root=None):

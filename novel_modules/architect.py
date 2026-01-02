@@ -1,7 +1,9 @@
 from nicegui import ui, run
 import json
+import backend
 from .state import app_state, manager, ui_refs
 from backend import CFG
+import uuid
 
 def create_architect_ui():
     # 使用 Splitter，设定更舒适的默认比例
@@ -159,15 +161,36 @@ def render_root_actions(ctx):
 
         # 底部大按钮
         async def do_plan():
+            print("\n>>> [DEBUG] 1. '生成分卷'按钮被点击") # <--- DEBUG
+            
+            # 1. 检查 API Key
+            api_key = CFG.get('api_key')
+            if not api_key:
+                print(">>> [ERROR] API Key 未配置！")
+                ui.notify('请先在系统配置中填写 API Key', type='negative')
+                return
+            print(f">>> [DEBUG] 2. API Key 检查通过: {api_key[:4]}***")
+
+            # 2. 构建 Prompt
             prompt = f"""
             你是一个网文主编。请基于以下信息，为全书规划 {vol_count.value} 个左右的【分卷 (Volumes)】。
-            【全书核心】{ctx['self_info']}
+            【全书核心】{ctx.get('self_info', '')}
             【用户引导】{guidance.value}
             【采用模型】{template.value}
             要求：JSON格式列表，包含 title, desc。
             """
-            await call_ai_and_preview(prompt, 'create_volumes')
+            print(f">>> [DEBUG] 3. Prompt 构建完成 (长度: {len(prompt)})")
             
+            # 3. 调用执行函数
+            try:
+                print(">>> [DEBUG] 4. 准备调用 call_ai_and_preview...")
+                await call_ai_and_preview(prompt, 'create_volumes')
+                print(">>> [DEBUG] 5. call_ai_and_preview 调用结束")
+            except Exception as e:
+                import traceback
+                print(f">>> [FATAL ERROR] do_plan 执行崩溃: {e}")
+                traceback.print_exc()
+
         ui.button('生成全书分卷骨架', icon='auto_awesome', on_click=do_plan) \
             .props('unelevated size=lg color=deep-purple') \
             .classes('w-full shadow-lg hover:shadow-xl transition-shadow rounded-lg font-bold text-lg')
@@ -235,35 +258,36 @@ def render_chapter_actions(ctx, chap_data):
 # ================= ⚡ 预览窗口 (AI Result) =================
 
 async def call_ai_and_preview(prompt, action_type, **kwargs):
-    # 使用 backdrop-blur 让背景虚化，更高级
+    print(f">>> [DEBUG] A. 进入 call_ai_and_preview (Type: {action_type})")
+
     result_area = ui.dialog().classes('backdrop-blur-sm')
     
-    # 弹窗本体：增加 rounded-2xl, shadow-2xl
+    # 弹窗本体
     with result_area, ui.card().classes('w-3/4 h-5/6 flex flex-col rounded-2xl shadow-2xl p-0 overflow-hidden'):
         
-        # 1. 顶部 Header (深色背景)
+        # 1. 顶部 Header
         with ui.row().classes('w-full items-center justify-between bg-gray-900 text-white p-4 shrink-0'):
             with ui.row().classes('items-center gap-2'):
                 ui.icon('smart_toy', color='purple-300')
                 ui.label('AI 推演结果').classes('text-lg font-bold')
             ui.button(icon='close', on_click=result_area.close).props('flat round dense color=white')
             
-        # 2. 内容区
+        # 2. 内容容器 (关键：这里只定义容器，不预先创建内部元素)
         content_wrapper = ui.column().classes('w-full flex-grow relative bg-gray-50')
         
-        # Loading 状态
+        # 3. 初始显示 Loading
         with content_wrapper:
-            spinner_box = ui.column().classes('absolute-center items-center gap-4')
-            with spinner_box:
+            with ui.column().classes('absolute-center items-center gap-4'):
                 ui.spinner('dots', size='4rem', color='purple')
-                ui.label('正在疯狂烧脑中...').classes('text-purple-600 font-bold animate-pulse')
+                ui.label('DeepSeek 正在疯狂烧脑中...').classes('text-purple-600 font-bold animate-pulse')
 
-        # 结果显示区 (初始隐藏)
-        scroll_area = ui.scroll_area().classes('w-full h-full p-6 hidden')
-        
         result_area.open()
+        
         try:
-            res = await run.io_bound(manager.sync_call_llm, prompt, "你是一个只输出JSON的架构师。", "architect")
+            print(">>> [DEBUG] C. 请求后端 LLM...")
+            # 调用后端
+            res = await run.io_bound(backend.sync_call_llm, prompt, "你是一个只输出JSON的架构师。", "architect")
+            print(f">>> [DEBUG] D. 后端返回: {len(res)} chars")
             
             # JSON 解析
             clean_json = res.replace("```json", "").replace("```", "").strip()
@@ -271,88 +295,132 @@ async def call_ai_and_preview(prompt, action_type, **kwargs):
             if start != -1 and end != -1: clean_json = clean_json[start:end+1]
             data = json.loads(clean_json)
             
-            spinner_box.set_visibility(False)
-            scroll_area.set_visibility(True)
-            scroll_area.move(content_wrapper) # 把 scroll_area 移入 wrapper
-            scroll_area.clear()
+            print(f">>> [DEBUG] F. 解析成功: {len(data)} 条")
+
+            # ==========================================
+            # 【核心修复】直接清空容器，从头绘制结果
+            # ==========================================
+            content_wrapper.clear() 
             
-            with scroll_area:
-                ui.label(f'🎉 推演成功！生成 {len(data)} 条结果').classes('text-green-600 font-bold text-lg mb-4')
-                
-                # --- 渲染结果列表 ---
-                if action_type == 'create_volumes':
-                    with ui.column().classes('gap-4 w-full'):
-                        for item in data:
-                            with ui.card().classes('w-full bg-white p-4 border-l-4 border-purple-500 shadow-sm'):
-                                ui.label(item.get('title', '无标题')).classes('font-bold text-lg text-gray-800')
-                                ui.markdown(item.get('desc', '')).classes('text-sm text-gray-600 mt-1')
+            with content_wrapper:
+                # 重新创建一个占满空间的 Scroll Area
+                with ui.scroll_area().classes('w-full h-full p-6'):
                     
-                    def apply_vols():
-                        start_id = max([v['id'] for v in app_state.volumes] or [0]) + 1
-                        for i, item in enumerate(data):
-                            app_state.volumes.append({"id": start_id + i, "title": item.get('title', f'分卷 {start_id+i}'), "desc": item.get('desc', '')})
-                        manager.save_volumes(app_state.volumes)
-                        ui.notify('分卷已创建！', type='positive')
-                        result_area.close()
+                    ui.label(f'🎉 推演成功！生成 {len(data)} 条结果').classes('text-green-600 font-bold text-lg mb-4')
                     
-                    ui.separator().classes('my-6')
-                    ui.button('✨ 采纳并创建分卷', on_click=apply_vols).props('unelevated size=lg color=green').classes('w-full font-bold shadow-md')
+                    # --- 渲染逻辑 (保持不变) ---
+                    if action_type == 'create_volumes':
+                        with ui.column().classes('gap-4 w-full'):
+                            for item in data:
+                                with ui.card().classes('w-full bg-white p-4 border-l-4 border-purple-500 shadow-sm'):
+                                    ui.label(item.get('title', '无标题')).classes('font-bold text-lg text-gray-800')
+                                    ui.markdown(item.get('desc', '')).classes('text-sm text-gray-600 mt-1')
+                        
+                        def apply_vols():
+                            print(">>> [DEBUG] 用户点击了'采纳分卷'")
+                            
+                            # 【修复前】错误代码: start_id = max([v['id']...]) + 1
+                            # 【修复后】使用 UUID 生成不重复的字符串 ID
+                            
+                            # 1. 计算当前的排序顺位 (order)
+                            current_max_order = max([v.get('order', 0) for v in app_state.volumes] or [0])
+                            
+                            for i, item in enumerate(data):
+                                # 生成类似 'vol_a1b2c3d4' 的唯一ID
+                                new_vol_id = f"vol_{str(uuid.uuid4())[:8]}"
+                                
+                                app_state.volumes.append({
+                                    "id": new_vol_id, 
+                                    "title": item.get('title', '新分卷'), 
+                                    "desc": item.get('desc', ''),
+                                    "order": current_max_order + 1 + i # 维护排序
+                                })
+                                
+                            manager.save_volumes(app_state.volumes)
+                            ui.notify('分卷已创建！', type='positive')
+                            
+                            if hasattr(app_state, 'refresh_sidebar') and app_state.refresh_sidebar:
+                                app_state.refresh_sidebar()
+                            result_area.close()
+                        
+                        ui.separator().classes('my-6')
+                        ui.button('✨ 采纳并创建分卷', on_click=apply_vols).props('unelevated size=lg color=green').classes('w-full font-bold shadow-md')
 
-                elif action_type == 'create_chapters':
-                    with ui.column().classes('gap-3 w-full'):
-                        for item in data:
-                            with ui.card().classes('w-full bg-white p-3 border border-gray-200 shadow-sm hover:shadow-md transition-shadow'):
-                                with ui.row().classes('items-center gap-2'):
-                                    ui.icon('article', color='purple-400')
-                                    ui.label(item.get('title', '无标题')).classes('font-bold text-gray-800')
-                                ui.markdown(item.get('outline', '')).classes('text-sm text-gray-600 mt-1 pl-6')
+                    elif action_type == 'create_chapters':
+                        with ui.column().classes('gap-3 w-full'):
+                            for item in data:
+                                with ui.card().classes('w-full bg-white p-3 border border-gray-200 shadow-sm hover:shadow-md transition-shadow'):
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.icon('article', color='purple-400')
+                                        ui.label(item.get('title', '无标题')).classes('font-bold text-gray-800')
+                                    ui.markdown(item.get('outline', '')).classes('text-sm text-gray-600 mt-1 pl-6')
 
-                    def apply_chaps():
-                        start_id = len(app_state.structure) + 1
-                        vol_id = kwargs['parent_id']
-                        for i, item in enumerate(data):
-                            app_state.structure.append({"id": start_id + i, "title": item.get('title', f'第{start_id+i}章'), "volume_id": vol_id, "content": "", "outline": item.get('outline', '')})
-                        manager.save_structure(app_state.structure)
-                        ui.notify('章节已创建！', type='positive')
-                        result_area.close()
+                        def apply_chaps():
+                            print(">>> [DEBUG] 用户点击了'采纳章节'")
+                        
+                            # 【优化】取当前最大ID + 1，防止 ID 冲突
+                            current_max_id = max([c['id'] for c in app_state.structure] or [0])
+                            start_id = current_max_id + 1
+                            
+                            vol_id = kwargs.get('parent_id')
+                            # 如果没有指定父卷，默认放入最后一卷
+                            if not vol_id and app_state.volumes:
+                                vol_id = app_state.volumes[-1]['id']
 
-                    ui.separator().classes('my-6')
-                    ui.button('✨ 采纳并创建章节', on_click=apply_chaps).props('unelevated size=lg color=green').classes('w-full font-bold shadow-md')
+                            for i, item in enumerate(data):
+                                app_state.structure.append({
+                                    "id": start_id + i, 
+                                    "title": item.get('title', f'第{start_id+i}章'), 
+                                    "volume_id": vol_id, 
+                                    "content": "", 
+                                    "outline": item.get('outline', '')
+                                })
+                                
+                            manager.save_structure(app_state.structure)
+                            ui.notify('章节已创建！', type='positive')
+                            
+                            if hasattr(app_state, 'refresh_sidebar') and app_state.refresh_sidebar:
+                                app_state.refresh_sidebar()
+                            result_area.close()
 
-                elif action_type == 'update_outline':
-                    # 场景流展示
-                    with ui.column().classes('gap-4 w-full'):
-                        for item in data:
-                             with ui.card().classes('w-full bg-white p-4 border-l-4 border-indigo-500 shadow-sm'):
-                                 with ui.row().classes('justify-between w-full'):
-                                     ui.label(item.get('scene', '场景')).classes('font-bold text-indigo-700')
-                                     ui.badge(item.get('est_words', '未知字数'), color='indigo-100').classes('text-indigo-800')
-                                 ui.markdown(item.get('desc', '')).classes('text-sm text-gray-700 mt-2 leading-relaxed')
+                        ui.separator().classes('my-6')
+                        ui.button('✨ 采纳并创建章节', on_click=apply_chaps).props('unelevated size=lg color=green').classes('w-full font-bold shadow-md')
 
-                    preview_text = "".join([f"### {item.get('scene', '场景')}\n_{item.get('est_words', '未知字数')}_\n\n{item.get('desc', '')}\n\n" for item in data])
-                    
-                    def apply_scenes():
-                        target_chap = kwargs['target_chap']
-                        original = target_chap.get('outline', '')
-                        target_chap['outline'] = (original + ("\n\n---\n\n" if original else "") + preview_text)
-                        manager.save_structure(app_state.structure)
-                        ui.notify('场景流已写入大纲！', type='positive')
-                        result_area.close()
+                    elif action_type == 'update_outline':
+                        with ui.column().classes('gap-4 w-full'):
+                            for item in data:
+                                 with ui.card().classes('w-full bg-white p-4 border-l-4 border-indigo-500 shadow-sm'):
+                                     with ui.row().classes('justify-between w-full'):
+                                         ui.label(item.get('scene', '场景')).classes('font-bold text-indigo-700')
+                                         ui.badge(item.get('est_words', '未知字数'), color='indigo-100').classes('text-indigo-800')
+                                     ui.markdown(item.get('desc', '')).classes('text-sm text-gray-700 mt-2 leading-relaxed')
 
-                    ui.separator().classes('my-6')
-                    ui.button('✨ 写入章节大纲', on_click=apply_scenes).props('unelevated size=lg color=green').classes('w-full font-bold shadow-md')
+                        preview_text = "".join([f"### {item.get('scene', '场景')}\n_{item.get('est_words', '未知字数')}_\n\n{item.get('desc', '')}\n\n" for item in data])
+                        
+                        def apply_scenes():
+                            target_chap = kwargs.get('target_chap')
+                            if target_chap:
+                                original = target_chap.get('outline', '')
+                                target_chap['outline'] = (original + ("\n\n---\n\n" if original else "") + preview_text)
+                                manager.save_structure(app_state.structure)
+                                ui.notify('场景流已写入大纲！', type='positive')
+                            result_area.close()
+
+                        ui.separator().classes('my-6')
+                        ui.button('✨ 写入章节大纲', on_click=apply_scenes).props('unelevated size=lg color=green').classes('w-full font-bold shadow-md')
 
         except Exception as e:
-            spinner_box.set_visibility(False)
-            scroll_area.set_visibility(True)
-            scroll_area.move(content_wrapper)
-            with scroll_area:
-                with ui.card().classes('bg-red-50 border border-red-200 p-6 w-full items-center'):
+            import traceback
+            traceback.print_exc()
+            
+            # 出错时也直接清空重绘
+            content_wrapper.clear()
+            with content_wrapper:
+                with ui.column().classes('w-full h-full items-center justify-center bg-red-50 p-6'):
                     ui.icon('error_outline', size='4rem', color='red-400')
-                    ui.label('推演遇到了点问题').classes('text-xl font-bold text-red-700 mt-2')
+                    ui.label('推演失败').classes('text-xl font-bold text-red-700 mt-2')
                     ui.label(str(e)).classes('text-red-500 mt-2 text-center')
-                
-                with ui.expansion('查看原始返回数据').classes('w-full mt-4'):
-                    ui.code(res if 'res' in locals() else 'No response').classes('text-xs')
+                    with ui.expansion('原始数据'):
+                        ui.code(res if 'res' in locals() else 'No response').classes('text-xs')
 
 def run_architect(theme, slider): pass
