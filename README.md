@@ -40,7 +40,7 @@
 ## 🛠️ 安装指南
 
 ### 前置要求
-- Python 3.10 或更高版本
+- Python 3.12.2(我用的这个版本)
 - 一个有效的 [DeepSeek API Key](https://platform.deepseek.com/)
 
 ### 1. 克隆项目
@@ -129,7 +129,7 @@ ai_novel_studio/
 ```
 ## 🧩 技术栈
 - Frontend: NiceGUI (基于 Vue/Quasar 的 Python UI 框架)
-- Backend: Python 3.12+
+- Backend: Python 3.12.2
 - LLM: OpenAI SDK (兼容 DeepSeek API)
 - Database:
   - JSON (结构化数据)
