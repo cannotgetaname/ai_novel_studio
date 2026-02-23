@@ -1058,20 +1058,20 @@ def sync_analyze_state(content, current_data_summary):
     {current_data_summary}
     
     【任务】
-    请分析正文，检测以下变化：
-    1. **人物状态变更**：等级、状态(受伤/死亡)、所属势力。
-    2. **物品变更**：持有者转移、物品状态变化、新物品获得。
-    3. **新实体**：是否出现了**重要**的新人物、新物品或新地点？
+    请分析正文，检测以下变化（请严格区分“更新”和“新增”）：
+    1. **人物状态变更**：已有的人物等级、状态(受伤/死亡)、所属势力发生变化。
+    2. **物品变更**：已有的物品发生持有者转移、状态变化。
+    3. **新实体提取**：正文中首次出现的**重要**新人物、新物品（如法宝、神兵、特殊道具）或新地点。必须放入对应的 new_ 数组中！
     4. **人际关系变更**：提取新关系（如拜师、结仇）或关系变化。
-    5. **地点连接 (新)**：主角是否从一个地点移动到了另一个地点？如果是，这意味着两个地点是连通的。提取这种拓扑关系。
+    5. **地点连接**：主角从一个地点移动到了另一个地点，提取这种拓扑关系。
     
     【输出格式】
-    严格 JSON 格式，字段如下：
+    严格 JSON 格式，不要包含任何 Markdown 标记（如 ```json），字段如下：
     {{
         "char_updates": [{{"name": "...", "field": "...", "new_value": "...", "reason": "..."}}],
         "item_updates": [{{"name": "...", "field": "...", "new_value": "..."}}],
         "new_chars": [{{"name": "...", "gender": "...", "role": "...", "status": "...", "bio": "..."}}],
-        "new_items": [{{"name": "...", "type": "...", "owner": "...", "desc": "..."}}],
+        "new_items": [{{"name": "...", "type": "...", "owner": "主角或其他人物", "desc": "物品的详细功能描述"}}],
         "new_locs": [{{"name": "...", "faction": "...", "desc": "..."}}],
         "relation_updates": [
             {{"source": "主动方", "target": "被动方", "type": "关系类型", "desc": "说明"}}
@@ -1132,6 +1132,12 @@ def apply_state_changes(novel_manager, changes):
                 logs.append(f"更新物品 [{item['name']}]: {update['field']} -> {update['new_value']}")
     for new_item in changes.get('new_items', []):
         if not any(i['name'] == new_item['name'] for i in items):
+            # 【关键修复】补全默认字段，防止前端渲染时因缺少字段而报错！
+            if 'owner' not in new_item: 
+                new_item['owner'] = '未知'
+            if 'desc' not in new_item: 
+                new_item['desc'] = 'AI自动提取'
+                
             items.append(new_item)
             logs.append(f"新增物品: {new_item['name']}")
     novel_manager.save_items(items)
