@@ -702,7 +702,7 @@ class NovelManager:
         
         # 2. 调用 LLM (复用已有的 sync_call_llm，注意这里其实应该用异步，但为了代码简单复用 io_bound)
         # 这里我们临时构造一个 system prompt
-        sys_prompt = "你是一个网文灵感助手。请只返回请求的内容，不要废话。"
+        sys_prompt = CFG['prompts'].get('inspiration_assistant_system', "你是一个网文灵感助手。请只返回请求的内容，不要废话。")
         
         try:
             # 使用已有的 client

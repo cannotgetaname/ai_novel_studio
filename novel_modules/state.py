@@ -13,9 +13,9 @@ class AppState:
         self.current_book_name = ""
         # 初始暂时不加载具体数据，或者加载最后一次打开的书
         # 这里为了演示，我们先留空，等 UI 触发加载
-        self.manager = None 
+        self.manager = None
         self.memory = None
-        
+
         # 数据层占位
         self.volumes = []
         self.structure = []
@@ -23,7 +23,7 @@ class AppState:
         self.characters = []
         self.items = []
         self.locations = []
-        
+
         # 运行时状态
         self.current_chapter_idx = 0
         self.current_content = ""
@@ -33,7 +33,11 @@ class AppState:
         # 回调
         self.refresh_sidebar = None
         self.refresh_total_word_count = None
-        
+
+        # 撤销/重做历史 - 为当前章节维护编辑历史
+        self.undo_stack = []  # 存储编辑状态
+        self.redo_stack = []  # 存储被撤销的状态
+
         # 尝试加载上次的书 (可选)
         last_book = CFG.get('last_open_book')
         if last_book and os.path.exists(os.path.join("projects", last_book)):
@@ -91,6 +95,94 @@ class AppState:
         if self.current_chapter_idx >= len(self.structure):
             self.current_chapter_idx = len(self.structure) - 1
         return self.structure[self.current_chapter_idx]
+
+    def save_state_for_undo(self, title, outline, content, time_label, time_events):
+        """保存当前编辑状态用于撤销 - 由用户直接编辑触发，会清空重做栈"""
+        # 创建当前状态的快照
+        state = {
+            'title': title,
+            'outline': outline,
+            'content': content,
+            'time_label': time_label,
+            'time_events': time_events,
+            'chapter_idx': self.current_chapter_idx
+        }
+
+        # 仅在与上一个状态显著不同时才保存（防抖）
+        if (not self.undo_stack or
+            self.undo_stack[-1]['content'] != content or
+            self.undo_stack[-1]['title'] != title or
+            self.undo_stack[-1]['outline'] != outline):
+
+            # 保存到撤销栈
+            self.undo_stack.append(state)
+
+            # 限制撤销栈大小，避免内存占用过大
+            if len(self.undo_stack) > 50:  # 保留最近50个状态
+                self.undo_stack.pop(0)
+
+            # 清空重做栈，因为新的用户编辑使之前的重做状态失效
+            self.redo_stack.clear()
+
+    def save_state_to_undo(self, state):
+        """将状态保存到撤销栈 - 由重做操作触发，不清空重做栈"""
+        # 只有在状态真正不同的时候才保存
+        if (not self.undo_stack or
+            self.undo_stack[-1]['content'] != state['content'] or
+            self.undo_stack[-1]['title'] != state['title'] or
+            self.undo_stack[-1]['outline'] != state['outline']):
+
+            self.undo_stack.append(state)
+            if len(self.undo_stack) > 50:
+                self.undo_stack.pop(0)
+        # 注意：这里不清空重做栈，因为这是从重做操作过来的，重做栈可能还有内容
+
+    def can_undo(self):
+        """检查是否可以撤销"""
+        return len(self.undo_stack) > 0
+
+    def can_redo(self):
+        """检查是否可以重做"""
+        return len(self.redo_stack) > 0
+
+    def undo_state(self):
+        """执行撤销操作，返回要恢复的状态"""
+        if not self.can_undo():
+            return None
+
+        # 弹出最后一个状态
+        return self.undo_stack.pop()
+
+    def redo_state(self):
+        """执行重做操作，返回要恢复的状态"""
+        if not self.can_redo():
+            return None
+
+        # 弹出重做栈顶的状态
+        return self.redo_stack.pop()
+
+    def save_state_to_redo(self, state):
+        """将状态保存到重做栈，带防抖机制"""
+        # 只有在状态真正不同的时候才保存
+        if (not self.redo_stack or
+            self.redo_stack[-1]['content'] != state['content'] or
+            self.redo_stack[-1]['title'] != state['title'] or
+            self.redo_stack[-1]['outline'] != state['outline']):
+
+            self.redo_stack.append(state)
+
+    def save_state_to_undo(self, state):
+        """将状态保存到撤销栈，但不立即清空重做栈"""
+        # 只有在状态真正不同的时候才保存
+        if (not self.undo_stack or
+            self.undo_stack[-1]['content'] != state['content'] or
+            self.undo_stack[-1]['title'] != state['title'] or
+            self.undo_stack[-1]['outline'] != state['outline']):
+
+            self.undo_stack.append(state)
+            if len(self.undo_stack) > 50:
+                self.undo_stack.pop(0)
+            # 注意：这里不清空重做栈，因为我们只在用户进行新编辑时才清空
 
 # 实例化单例
 app_state = AppState()

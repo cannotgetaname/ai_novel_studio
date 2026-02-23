@@ -85,7 +85,7 @@ async def main_page():
     # --- 4.1 Header (固定顶部) ---
     with ui.header().classes('bg-white text-black shadow-sm shrink-0'):
         ui.button(on_click=lambda: drawer.toggle(), icon='menu').props('flat color=black')
-        ui.label('AI 网文工作站 (V15.2 配置管理版)').classes('text-h6')
+        ui.label('AI 网文工作站').classes('text-h6')
 
     # --- 4.2 Left Drawer (左侧边栏) ---
     with ui.left_drawer(value=True).classes('bg-blue-50 flex flex-col') as drawer:

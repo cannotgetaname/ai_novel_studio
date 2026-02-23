@@ -599,7 +599,7 @@ async def call_ai_and_preview(prompt, action_type, **kwargs):
         try:
             print(">>> [DEBUG] C. 请求后端 LLM...")
             # 调用后端
-            res = await run.io_bound(backend.sync_call_llm, prompt, "你是一个只输出JSON的架构师。", "architect")
+            res = await run.io_bound(backend.sync_call_llm, prompt, CFG['prompts']['json_only_architect_system'], "architect")
             print(f">>> [DEBUG] D. 后端返回: {len(res)} chars")
             
             # JSON 解析

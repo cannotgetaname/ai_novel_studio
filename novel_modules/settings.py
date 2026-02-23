@@ -573,7 +573,9 @@ def refresh_config_ui():
                     ('timekeeper_system', '时间记录员'),
                     ('knowledge_filter_system', '知识清洗'),
                     ('summary_chapter_system', '章节摘要'),
-                    ('summary_book_system', '全书总结')
+                    ('summary_book_system', '全书总结'),
+                    ('json_only_architect_system', 'JSON架构师'),
+                    ('inspiration_assistant_system', '灵感助手')
                 ]
                 
                 for key, label in prompt_keys:
