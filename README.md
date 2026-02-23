@@ -36,7 +36,7 @@
 ## 🚀 快速开始
 
 ### 环境要求
-- Python 3.10+
+- Python 3.12.2
 - 有效的AI服务API Key (支持OpenAI、DeepSeek等兼容接口)
 
 ### 安装步骤
