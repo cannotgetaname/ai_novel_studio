@@ -342,7 +342,7 @@ try:
         await writing.load_chapter(0)
         await refresh_total_word_count()
 
-    ui.run(title='AI Novel Studio', port=8080, reload=False)
+    ui.run(title='AI Novel Studio', port=8081, reload=False)
 
 except ImportError as e:
     print(f"导入错误: {e}")

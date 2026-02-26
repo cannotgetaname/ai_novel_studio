@@ -292,4 +292,4 @@ async def main_page():
     await writing.load_chapter(0)
     await refresh_total_word_count()
 
-ui.run(title='AI Novel Studio', port=8080, reload=False)
+ui.run(title='AI Novel Studio', port=8081, reload=False)
