@@ -171,18 +171,6 @@ class AppState:
 
             self.redo_stack.append(state)
 
-    def save_state_to_undo(self, state):
-        """将状态保存到撤销栈，但不立即清空重做栈"""
-        # 只有在状态真正不同的时候才保存
-        if (not self.undo_stack or
-            self.undo_stack[-1]['content'] != state['content'] or
-            self.undo_stack[-1]['title'] != state['title'] or
-            self.undo_stack[-1]['outline'] != state['outline']):
-
-            self.undo_stack.append(state)
-            if len(self.undo_stack) > 50:
-                self.undo_stack.pop(0)
-            # 注意：这里不清空重做栈，因为我们只在用户进行新编辑时才清空
 
 # 实例化单例
 app_state = AppState()

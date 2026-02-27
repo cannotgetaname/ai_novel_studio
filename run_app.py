@@ -260,12 +260,62 @@ try:
                                 # flex-grow: 占据剩余所有宽度
                                 # h-full: 占满高度
                                 with ui.card().classes('flex-grow h-full p-0 rounded-none border-none'):
-                                    world_editor = ui.codemirror(value=app_state.settings['world_view'], language='markdown') \
-                                        .classes('w-full h-full text-base font-sans') \
-                                        .style('font-family: system-ui, -apple-system, sans-serif !important;') \
-                                        .props('options="{lineWrapping: true, lineNumbers: false}" borderless')
+                                    # 创建标签切换按钮
+                                    with ui.row().classes('w-full bg-grey-100 shrink-0') as tab_row:
+                                        editor_active = ui.element('div').props('innerHTML="edit"').classes('hidden')  # 默认为编辑状态
 
-                        # 2.2 人物
+                                        async def switch_to_edit():
+                                            edit_panel.classes(replace='w-full h-full')  # 显示编辑面板
+                                            preview_panel.classes(replace='w-full h-full hidden')  # 隐藏预览面板
+                                            edit_btn.props('color=primary')
+                                            preview_btn.props('color=grey')
+                                            editor_active._props['innerHTML'] = 'edit'
+
+                                        async def switch_to_preview():
+                                            edit_panel.classes(replace='w-full h-full hidden')  # 隐藏编辑面板
+                                            preview_panel.classes(replace='w-full h-full')  # 显示预览面板
+                                            edit_btn.props('color=grey')
+                                            preview_btn.props('color=primary')
+                                            editor_active._props['innerHTML'] = 'preview'
+
+                                        with ui.row().classes('w-full justify-start pl-2 py-1'):  # 靠左对齐并添加内边距
+                                            edit_btn = ui.button('📝 编辑', on_click=switch_to_edit).props('flat no-caps color=primary size=sm').classes('mr-2')  # 缩小按钮尺寸
+                                            preview_btn = ui.button('👁️ 预览', on_click=switch_to_preview).props('flat no-caps color=grey size=sm')  # 缩小按钮尺寸
+
+                                    # 内容面板容器
+                                    with ui.column().classes('w-full h-full flex-grow') as editor_content:
+                                        # 编辑面板 - 使用classes方法控制可见性而不是set_visibility
+                                        with ui.column().classes('w-full h-full') as edit_panel:
+                                            # 确保codemirror编辑器正确填充空间并启用换行
+                                            world_editor = ui.codemirror(value=app_state.settings['world_view'], language='markdown') \
+                                                .classes('w-full h-full text-base font-sans overflow-hidden') \
+                                                .style('font-family: system-ui, -apple-system, sans-serif !important; width: 100% !important; height: 100% !important; word-wrap: break-word; word-break: break-word; overflow-wrap: break-word;') \
+                                                .props('options="{lineWrapping: true, lineNumbers: true, scrollbarStyle: \"native\", mode: \"gfm\", foldGutter: true, gutters: [\"CodeMirror-linenumbers\", \"CodeMirror-foldgutter\"], autoCloseBrackets: true, matchBrackets: true, theme: \"default\"}"')
+
+                                        # 预览面板 - 使用classes方法控制可见性而不是set_visibility
+                                        with ui.column().classes('w-full h-full hidden') as preview_panel:
+                                            world_preview = ui.markdown(app_state.settings['world_view']).classes('w-full h-full p-4 bg-white overflow-auto')
+
+                                    # 实时更新预览
+                                    def update_preview(e):
+                                        # 实时更新预览内容
+                                        world_preview.content = e.value
+
+                                    # 等待编辑器创建完成后再绑定事件
+                                    async def setup_editor_events():
+                                        await ui.run_javascript('''
+                                            // 等待DOM更新完成
+                                        ''')
+                                        world_editor.on('input', update_preview)  # 当输入时更新预览
+
+                                    # 初始化时设置默认状态 - 使用classes方法
+                                    edit_panel.classes(replace='w-full h-full')  # 显示编辑面板
+                                    preview_panel.classes(replace='w-full h-full hidden')  # 隐藏预览面板
+                                    edit_btn.props('color=primary')
+                                    preview_btn.props('color=grey')
+
+                                    # 初始化事件绑定
+                                    ui.timer(0.1, setup_editor_events, once=True)
                         with ui.tab_panel(t_char).classes('h-full w-full p-2 flex flex-col'):
                             with ui.row().classes('w-full justify-between items-center pb-2 shrink-0'):
                                 with ui.button_group():

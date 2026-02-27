@@ -374,28 +374,28 @@ def render_root_actions(ctx):
                 ui.label('🌀 裂变策略').classes('text-xs font-bold text-gray-500')
                 fission_options = {k: f"{v['name']} - {v['description']}" for k, v in FISSION_TYPES.items()}
                 fission_type = ui.select(fission_options, value='standard').classes('w-full').props('outlined dense bg-white')
-                
+
                 # 模板选择
                 ui.label('📚 叙事模型').classes('text-xs font-bold text-gray-500 mt-2')
                 template = ui.select(
-                    ['网文升级流 (换地图)', '英雄之旅 (12步)', '救猫咪 (15节拍)', '无限流 (单元剧)', '三段式 (起承转合)'], 
+                    ['网文升级流 (换地图)', '英雄之旅 (12步)', '救猫咪 (15节拍)', '无限流 (单元剧)', '三段式 (起承转合)'],
                     value='网文升级流 (换地图)'
                 ).classes('w-full').props('outlined dense bg-white')
-                
+
                 # 滑块
                 ui.separator().classes('bg-gray-200 mt-2')
                 with ui.column().classes('w-full gap-1'):
                      with ui.row().classes('justify-between w-full'):
                         ui.label('分卷数量').classes('text-xs font-bold text-gray-500')
                         count_label = ui.label('5 卷').classes('text-xs font-bold text-purple-600')
-                     
+
                      vol_count = ui.slider(min=3, max=20, value=5, step=1).props('color=purple label-always') \
                         .on_value_change(lambda e: count_label.set_text(f'{e.value} 卷'))
 
         # 底部大按钮
         async def do_plan():
             print("\n>>> [DEBUG] 1. '生成分卷'按钮被点击") # <--- DEBUG
-            
+
             # 1. 检查 API Key
             api_key = CFG.get('api_key')
             if not api_key:
@@ -406,18 +406,18 @@ def render_root_actions(ctx):
 
             # 2. 根据裂变类型构建不同的Prompt
             fission_info = FISSION_TYPES.get(fission_type.value, FISSION_TYPES['standard'])
-            
+
             prompt = f"""
             你是一个网文主编。请基于以下信息，为全书规划 {vol_count.value} 个左右的【分卷 (Volumes)】。
-            
+
             【裂变策略】{fission_info['name']} - {fission_info['description']}
             【全书核心】{ctx.get('self_info', '')}
             【用户引导】{guidance.value}
             【叙事模型】{template.value}
-            
+
             【特殊要求】
             """
-            
+
             # 根据裂变类型添加特殊指令
             if fission_type.value == 'time_based':
                 prompt += "请严格按时间顺序规划，每个分卷代表一个明确的时间段（如：少年期、青年期、巅峰期）。"
@@ -429,11 +429,11 @@ def render_root_actions(ctx):
                 prompt += "请围绕核心冲突的演变来规划分卷，每个分卷代表冲突的一个阶段（如：冲突酝酿、爆发、高潮、解决）。"
             else:
                 prompt += "请根据剧情发展阶段自然划分分卷，确保每个分卷有明确的起承转合。"
-            
+
             prompt += "\n\n要求：JSON格式列表，包含 title, desc, estimated_chapters（预估章节数）。"
-            
+
             print(f">>> [DEBUG] 3. Prompt 构建完成 (长度: {len(prompt)})")
-            
+
             # 3. 调用执行函数
             try:
                 print(">>> [DEBUG] 4. 准备调用 call_ai_and_preview...")
@@ -447,6 +447,52 @@ def render_root_actions(ctx):
         ui.button('生成全书分卷骨架', icon='auto_awesome', on_click=do_plan) \
             .props('unelevated size=lg color=deep-purple') \
             .classes('w-full shadow-lg hover:shadow-xl transition-shadow rounded-lg font-bold text-lg')
+
+        # 新增：生成世界观按钮
+        async def generate_world_view():
+            print("\n>>> [DEBUG] 1. '生成世界观'按钮被点击")
+
+            # 检查 API Key
+            api_key = CFG.get('api_key')
+            if not api_key:
+                print(">>> [ERROR] API Key 未配置！")
+                ui.notify('请先在系统配置中填写 API Key', type='negative')
+                return
+            print(f">>> [DEBUG] 2. API Key 检查通过: {api_key[:4]}***")
+
+            # 构建生成世界观的提示词
+            prompt = f"""
+            请基于以下信息生成一个完整的世界观设定：
+
+            【全书核心】{ctx.get('self_info', '')}
+            【用户引导】{guidance.value}
+            【叙事模型】{template.value}
+
+            请生成详细的世界观设定，包括但不限于：
+            1. 世界基本设定（时空背景、社会结构、修炼/职业体系等）
+            2. 主要势力分布（门派、国家、组织等）
+            3. 人物等级体系（实力划分、境界设定等）
+            4. 重要物品/道具体系（武器、丹药、功法等）
+            5. 世界规则（魔法系统、科技水平、法律法规等）
+
+            请用结构化的格式输出，便于后续写作时查阅。
+            """
+
+            print(f">>> [DEBUG] 3. 世界观Prompt 构建完成 (长度: {len(prompt)})")
+
+            # 调用生成世界观函数
+            try:
+                print(">>> [DEBUG] 4. 准备调用 generate_world_view_preview...")
+                await generate_world_view_preview(prompt)
+                print(">>> [DEBUG] 5. generate_world_view_preview 调用结束")
+            except Exception as e:
+                import traceback
+                print(f">>> [FATAL ERROR] generate_world_view 执行崩溃: {e}")
+                traceback.print_exc()
+
+        ui.button('生成世界观设定', icon='travel_explore', on_click=generate_world_view) \
+            .props('unelevated size=lg color=teal') \
+            .classes('w-full mt-4 shadow-lg hover:shadow-xl transition-shadow rounded-lg font-bold text-lg')
 
 def render_volume_actions(ctx, vol_data):
     with ui.card().classes('w-full bg-white shadow-md rounded-xl p-6 gap-6'):
@@ -462,27 +508,27 @@ def render_volume_actions(ctx, vol_data):
                 ui.label('🌀 章节裂变策略').classes('text-xs font-bold text-gray-500')
                 fission_options = {k: f"{v['name']}" for k, v in FISSION_TYPES.items()}
                 fission_type = ui.select(fission_options, value='standard').classes('w-full').props('outlined dense bg-white')
-                
+
                 ui.label('🎭 风格与节奏').classes('text-xs font-bold text-gray-500 mt-2')
                 template = ui.select(['爽文打脸流', '三幕式结构', '悬疑解谜流', '日常种田流'], value='爽文打脸流').classes('w-full').props('outlined dense bg-white')
-                
+
                 ui.label('📄 预计章节数').classes('text-xs font-bold text-gray-500 mt-2')
                 count = ui.number(value=15, min=1, max=100).classes('w-full').props('outlined dense bg-white suffix="章"')
-        
+
         async def do_plan():
             fission_info = FISSION_TYPES.get(fission_type.value, FISSION_TYPES['standard'])
-            
+
             prompt = f"""
             你是一个网文架构师。请将【{vol_data['title']}】拆解为 {int(count.value)} 个左右的章节。
-            
+
             【裂变策略】{fission_info['name']} - {fission_info['description']}
             【本卷目标】{ctx['self_info']}
             【用户引导】{guidance.value}
             【风格模型】{template.value}
-            
+
             【特殊要求】
             """
-            
+
             # 根据裂变类型添加特殊指令
             if fission_type.value == 'time_based':
                 prompt += "请严格按时间顺序规划章节，每章代表一个明确的时间点或时间段。"
@@ -494,14 +540,60 @@ def render_volume_actions(ctx, vol_data):
                 prompt += "请围绕冲突的展开来规划章节，每章代表冲突的一个回合或转折点。"
             else:
                 prompt += "请根据剧情自然流程度划分章节，确保每章有明确的冲突和解决。"
-            
+
             prompt += "\n\n要求：JSON格式列表，包含 title, outline, estimated_words（预估字数）。"
-            
+
             await call_ai_and_preview(prompt, 'create_chapters', parent_id=vol_data['id'], fission_type=fission_type.value)
-            
+
         ui.button('推演本卷章节细纲', icon='psychology', on_click=do_plan) \
             .props('unelevated size=lg color=purple') \
             .classes('w-full shadow-lg hover:shadow-xl transition-shadow rounded-lg font-bold')
+
+        # 新增：生成世界观按钮
+        async def generate_world_view():
+            print("\n>>> [DEBUG] 1. '生成分卷世界观'按钮被点击")
+
+            # 检查 API Key
+            api_key = CFG.get('api_key')
+            if not api_key:
+                print(">>> [ERROR] API Key 未配置！")
+                ui.notify('请先在系统配置中填写 API Key', type='negative')
+                return
+            print(f">>> [DEBUG] 2. API Key 检查通过: {api_key[:4]}***")
+
+            # 构建生成世界观的提示词
+            prompt = f"""
+            请基于以下信息为【{vol_data['title']}】这一分卷生成详细的世界观设定：
+
+            【本卷核心】{ctx['self_info']}
+            【全书世界观】{app_state.settings.get('world_view', '暂无')}
+            【用户引导】{guidance.value}
+            【风格模型】{template.value}
+
+            请重点描述这一分卷中的特殊设定，包括但不限于：
+            1. 本分卷涉及的地点与环境
+            2. 本分卷中出现的新势力或重要人物
+            3. 本分卷特有的规则或变化
+            4. 本分卷中的关键物品或资源
+
+            请注意与全书世界观保持一致，只补充本分卷的细节。
+            """
+
+            print(f">>> [DEBUG] 3. 分卷世界观Prompt 构建完成 (长度: {len(prompt)})")
+
+            # 调用生成世界观函数
+            try:
+                print(">>> [DEBUG] 4. 准备调用 generate_world_view_preview...")
+                await generate_world_view_preview(prompt)
+                print(">>> [DEBUG] 5. generate_world_view_preview 调用结束")
+            except Exception as e:
+                import traceback
+                print(f">>> [FATAL ERROR] generate_world_view 执行崩溃: {e}")
+                traceback.print_exc()
+
+        ui.button('生成分卷世界观', icon='travel_explore', on_click=generate_world_view) \
+            .props('unelevated size=lg color=teal') \
+            .classes('w-full mt-4 shadow-lg hover:shadow-xl transition-shadow rounded-lg font-bold')
 
 def render_chapter_actions(ctx, chap_data):
     with ui.card().classes('w-full bg-white shadow-md rounded-xl p-6 gap-6'):
@@ -515,20 +607,20 @@ def render_chapter_actions(ctx, chap_data):
                 ui.label('🌀 场景裂变策略').classes('text-xs font-bold text-gray-500')
                 scene_fission_options = {
                     'dialogue_based': '对话驱动型',
-                    'action_based': '动作驱动型', 
+                    'action_based': '动作驱动型',
                     'emotion_based': '情感驱动型',
                     'reveal_based': '揭示驱动型',
                     'standard': '标准场景流'
                 }
                 scene_fission_type = ui.select(scene_fission_options, value='standard').classes('w-full').props('outlined dense bg-white')
-                
+
                 with ui.row().classes('justify-between w-full mt-2'):
                     ui.label('场景切分 (Beats)').classes('text-xs font-bold text-gray-500')
                     scene_label = ui.label('4 个').classes('text-xs font-bold text-indigo-600')
-                
+
                 scene_count = ui.slider(min=2, max=8, value=4, step=1).props('color=indigo label-always') \
                     .on_value_change(lambda e: scene_label.set_text(f'{e.value} 个'))
-                
+
                 ui.label('提示：场景是写作的最小单位，包含地点、人物和冲突。').classes('text-xs text-gray-400 italic leading-tight')
 
         async def do_plan():
@@ -540,23 +632,69 @@ def render_chapter_actions(ctx, chap_data):
                 'reveal_based': '以信息揭示为核心驱动剧情发展，每个场景包含关键信息揭露',
                 'standard': '标准的场景划分，包含完整的起承转合'
             }
-            
+
             fission_desc = scene_fission_descriptions.get(scene_fission_type.value, scene_fission_descriptions['standard'])
-            
+
             prompt = f"""
             微观剧情设计：将【{chap_data['title']}】拆解为 {scene_count.value} 个具体的【场景】。
-            
+
             【场景策略】{fission_desc}
             【本章大纲】{guidance.value}
             【上级分卷】{ctx['parent_info']}
-            
+
             要求：JSON格式列表，包含 scene（场景标题）, desc（场景描述）, est_words（预估字数）, key_elements（关键元素：对话/动作/情感/揭示）。
             """
             await call_ai_and_preview(prompt, 'update_outline', target_chap=chap_data, fission_type=scene_fission_type.value)
-            
+
         ui.button('生成场景流 (Beat Sheet)', icon='movie_filter', on_click=do_plan) \
             .props('unelevated size=lg color=indigo') \
             .classes('w-full shadow-lg hover:shadow-xl transition-shadow rounded-lg font-bold')
+
+        # 新增：生成世界观按钮
+        async def generate_world_view():
+            print("\n>>> [DEBUG] 1. '生成章节世界观'按钮被点击")
+
+            # 检查 API Key
+            api_key = CFG.get('api_key')
+            if not api_key:
+                print(">>> [ERROR] API Key 未配置！")
+                ui.notify('请先在系统配置中填写 API Key', type='negative')
+                return
+            print(f">>> [DEBUG] 2. API Key 检查通过: {api_key[:4]}***")
+
+            # 构建生成世界观的提示词
+            prompt = f"""
+            请基于以下信息为【{chap_data['title']}】这一章节生成详细的世界观细节：
+
+            【本章大纲】{guidance.value}
+            【本章目标】{ctx['self_info']}
+            【上级分卷世界观】{ctx['parent_info']}
+            【全书世界观】{app_state.settings.get('world_view', '暂无')}
+
+            请重点描述这一章节中的具体设定，包括但不限于：
+            1. 本章涉及的具体地点和环境描述
+            2. 本章中出现的特定人物及其状态
+            3. 本章中的关键道具或资源
+            4. 本章涉及的特殊规则或情境
+
+            请注意与全书和分卷世界观保持一致，只补充本章节的细节。
+            """
+
+            print(f">>> [DEBUG] 3. 章节世界观Prompt 构建完成 (长度: {len(prompt)})")
+
+            # 调用生成世界观函数
+            try:
+                print(">>> [DEBUG] 4. 准备调用 generate_world_view_preview...")
+                await generate_world_view_preview(prompt)
+                print(">>> [DEBUG] 5. generate_world_view_preview 调用结束")
+            except Exception as e:
+                import traceback
+                print(f">>> [FATAL ERROR] generate_world_view 执行崩溃: {e}")
+                traceback.print_exc()
+
+        ui.button('生成章节世界观', icon='travel_explore', on_click=generate_world_view) \
+            .props('unelevated size=lg color=teal') \
+            .classes('w-full mt-4 shadow-lg hover:shadow-xl transition-shadow rounded-lg font-bold')
 
 # ================= ⚡ 预览窗口 (AI Result) =================
 
@@ -767,3 +905,137 @@ async def call_ai_and_preview(prompt, action_type, **kwargs):
                         ui.code(res if 'res' in locals() else 'No response').classes('text-xs')
 
 def run_architect(theme, slider): pass
+
+
+# ================= 🌍 世界观生成功能 =================
+
+async def generate_world_view_preview(prompt):
+    """
+    生成世界观设定的预览窗口
+    """
+    print(f">>> [DEBUG] A. 进入 generate_world_view_preview")
+
+    result_area = ui.dialog().classes('backdrop-blur-sm')
+
+    # 弹窗本体
+    with result_area, ui.card().classes('w-3/4 h-5/6 flex flex-col rounded-2xl shadow-2xl p-0 overflow-hidden'):
+
+        # 1. 顶部 Header
+        with ui.row().classes('w-full items-center justify-between bg-teal-900 text-white p-4 shrink-0'):
+            with ui.row().classes('items-center gap-2'):
+                ui.icon('travel_explore', color='teal-300')
+                ui.label('AI 世界观生成').classes('text-lg font-bold')
+
+            ui.button(icon='close', on_click=result_area.close).props('flat round dense color=white')
+
+        # 2. 内容容器
+        content_wrapper = ui.column().classes('w-full flex-grow relative bg-gray-50')
+
+        # 3. 初始显示 Loading
+        with content_wrapper:
+            with ui.column().classes('absolute-center items-center gap-4'):
+                ui.spinner('dots', size='4rem', color='teal')
+                ui.label('世界观生成中...').classes('text-teal-600 font-bold animate-pulse')
+                ui.label('正在构建世界设定').classes('text-sm text-gray-400')
+
+        result_area.open()
+
+        try:
+            print(">>> [DEBUG] C. 请求后端 LLM...")
+            # 调用后端生成世界观
+            res = await run.io_bound(backend.sync_call_llm, prompt, CFG['prompts']['writer_system'], "architect")
+            print(f">>> [DEBUG] D. 后端返回: {len(res)} chars")
+
+            # ==========================================
+            # 【核心修复】直接清空容器，从头绘制结果
+            # ==========================================
+            content_wrapper.clear()
+
+            with content_wrapper:
+                # 重新创建一个占满空间的 Scroll Area
+                with ui.scroll_area().classes('w-full h-full p-6'):
+
+                    # 显示结果标题
+                    with ui.row().classes('items-center gap-3 mb-4'):
+                        ui.icon('travel_explore', size='lg', color='teal')
+                        with ui.column().classes('gap-0'):
+                            ui.label('🎉 世界观生成成功！').classes('text-teal-600 font-bold text-lg')
+                            ui.label('详细的世界设定已生成').classes('text-gray-500 text-sm')
+
+                    # 显示生成的世界观内容
+                    with ui.card().classes('w-full bg-white p-4 border border-teal-200 shadow-sm'):
+                        ui.markdown(res).classes('text-base text-gray-800 leading-relaxed')
+
+                    # 保存选项
+                    with ui.row().classes('items-center gap-4 mt-6 p-4 bg-teal-50 rounded-lg border border-teal-100'):
+                        ui.icon('info', color='teal-500').classes('text-lg')
+                        ui.label('您可以选择如何处理生成的世界观设定：').classes('text-teal-700 font-medium')
+
+                    # 保存按钮区域
+                    with ui.row().classes('w-full gap-4 mt-2'):
+                        # 选项1：追加到现有世界观
+                        async def append_to_world_view():
+                            current_world_view = app_state.settings.get('world_view', '')
+                            new_world_view = current_world_view + ('\n\n' if current_world_view else '') + res
+                            app_state.settings['world_view'] = new_world_view
+
+                            # 保存到后端
+                            await run.io_bound(manager.save_settings, app_state.settings)
+
+                            # 更新Codemirror编辑器的值（如果存在的话）
+                            if 'world_editor' in ui_refs and ui_refs['world_editor'] is not None:
+                                ui_refs['world_editor'].value = new_world_view
+
+                            ui.notify('世界观已追加到现有设定！', type='positive')
+                            result_area.close()
+
+                        # 选项2：替换现有世界观
+                        async def replace_world_view():
+                            app_state.settings['world_view'] = res
+
+                            # 保存到后端
+                            await run.io_bound(manager.save_settings, app_state.settings)
+
+                            # 更新Codemirror编辑器的值（如果存在的话）
+                            if 'world_editor' in ui_refs and ui_refs['world_editor'] is not None:
+                                ui_refs['world_editor'].value = res
+
+                            ui.notify('世界观已替换现有设定！', type='positive')
+                            result_area.close()
+
+                        # 选项3：仅复制到剪贴板
+                        async def copy_to_clipboard():
+                            # 在 NiceGUI 中复制到剪贴板需要 JavaScript
+                            await ui.run_javascript(f'''
+                                navigator.clipboard.writeText(`{res.replace("`", "\\`")}`);
+                            ''', respond=False)
+                            ui.notify('世界观内容已复制到剪贴板！', type='positive')
+
+                        with ui.column().classes('w-1/3'):
+                            ui.button('📋 追加到现有设定',
+                                     on_click=append_to_world_view) \
+                                .props('unelevated color=teal').classes('w-full font-bold')
+
+                        with ui.column().classes('w-1/3'):
+                            ui.button('🔄 替换现有设定',
+                                     on_click=replace_world_view) \
+                                .props('unelevated color=red').classes('w-full font-bold')
+
+                        with ui.column().classes('w-3/4'):
+                            ui.button('📄 仅复制内容',
+                                     on_click=copy_to_clipboard) \
+                                .props('outline color=gray').classes('w-full font-bold')
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+
+            # 出错时也直接清空重绘
+            content_wrapper.clear()
+            with content_wrapper:
+                with ui.column().classes('w-full h-full items-center justify-center bg-red-50 p-6'):
+                    ui.icon('error_outline', size='4rem', color='red-400')
+                    ui.label('世界观生成失败').classes('text-xl font-bold text-red-700 mt-2')
+                    ui.label(str(e)).classes('text-red-500 mt-2 text-center')
+                    with ui.expansion('原始数据'):
+                        ui.code(res if 'res' in locals() else 'No response').classes('text-xs')

@@ -72,7 +72,7 @@ cp config.example.json config.json
 
 5. **启动应用**
 ```bash
-python main.py
+python run_app.py
 ```
 访问 http://localhost:8080 即可开始创作
 

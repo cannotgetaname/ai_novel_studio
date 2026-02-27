@@ -115,7 +115,10 @@ def save_current_state():
         time_events = time_events_ref.value if time_events_ref is not None else ""
 
         # 只有当内容发生实质变化时才保存状态（防抖）
-        if not app_state.undo_stack or app_state.undo_stack[-1]['content'] != content:
+        if (not app_state.undo_stack or
+            app_state.undo_stack[-1]['content'] != content or
+            app_state.undo_stack[-1]['title'] != title or
+            app_state.undo_stack[-1]['outline'] != outline):
             # 保存状态到撤销栈
             app_state.save_state_for_undo(title, outline, content, time_label, time_events)
 
@@ -311,20 +314,66 @@ async def delete_volume_dialog():
         ui.label('🗑️ 删除分卷').classes('text-h6 text-red')
         vol_options = {v['id']: v['title'] for v in app_state.volumes}
         selected_vol = ui.select(vol_options, label='选择要删除的分卷').classes('w-full')
+        move_to_default = ui.checkbox('将章节移至默认分卷而不是删除它们', value=True).classes('mt-2')
+
         async def confirm_del():
             vol_id = selected_vol.value
             if not vol_id: return
-            has_chapters = any(c['volume_id'] == vol_id for c in app_state.structure)
-            if has_chapters:
-                ui.notify('该分卷不为空，请先删除或移动其中的章节！', type='negative')
-                return
+
+            # 获取该分卷中的所有章节
+            chapters_to_delete = [c for c in app_state.structure if c['volume_id'] == vol_id]
+
+            if chapters_to_delete:
+                if move_to_default.value:
+                    # 移动章节到默认分卷
+                    default_vol_id = app_state.volumes[0]['id'] if app_state.volumes else 'vol_default'
+                    for chap in chapters_to_delete:
+                        chap['volume_id'] = default_vol_id
+                    await run.io_bound(manager.save_structure, app_state.structure)
+                    ui.notify(f'{len(chapters_to_delete)} 个章节已移至默认分卷', type='info')
+                else:
+                    # 删除该分卷中的所有章节
+                    for chap in chapters_to_delete:
+                        await run.io_bound(manager.delete_chapter, chap['id'])
+                        await run.io_bound(memory.delete_chapter_memory, chap['id'])
+
+                    # 从结构中移除这些章节
+                    app_state.structure = [c for c in app_state.structure if c['volume_id'] != vol_id]
+                    await run.io_bound(manager.save_structure, app_state.structure)
+                    ui.notify(f'{len(chapters_to_delete)} 个章节已随分卷一起删除', type='info')
+
+                    # 如果当前章节属于被删除的分卷，重新加载
+                    current_chap = app_state.get_current_chapter()
+                    if not current_chap or current_chap['volume_id'] == vol_id:
+                        if app_state.structure:
+                            await load_chapter(0)
+                        else:
+                            # 如果所有章节都被删除了，清空编辑器
+                            if 'editor_title' in ui_refs and ui_refs['editor_title'] is not None:
+                                ui_refs['editor_title'].value = ""
+                            if 'editor_outline' in ui_refs and ui_refs['editor_outline'] is not None:
+                                ui_refs['editor_outline'].value = ""
+                            if 'editor_content' in ui_refs and ui_refs['editor_content'] is not None:
+                                ui_refs['editor_content'].value = ""
+                            if 'char_count' in ui_refs and ui_refs['char_count'] is not None:
+                                ui_refs['char_count'].set_text("当前章节字数: 0")
+                            app_state.current_chapter_idx = -1
+
+            # 删除分卷
             vol_idx = next((i for i, v in enumerate(app_state.volumes) if v['id'] == vol_id), None)
             if vol_idx is not None:
                 del app_state.volumes[vol_idx]
                 await run.io_bound(manager.save_volumes, app_state.volumes)
-                if app_state.refresh_sidebar: app_state.refresh_sidebar()
+
+                # 从展开的分卷列表中移除
+                if vol_id in app_state.expanded_volumes:
+                    app_state.expanded_volumes.discard(vol_id)
+
                 ui.notify('分卷已删除', type='positive')
-                dialog.close()
+
+            if app_state.refresh_sidebar: app_state.refresh_sidebar()
+            dialog.close()
+
         ui.button('确认删除', on_click=confirm_del).props('color=red w-full')
     dialog.open()
 
@@ -350,18 +399,36 @@ async def add_chapter_to_volume(vol_id=None):
 async def add_new_chapter_auto(): await add_chapter_to_volume(None)
 
 async def delete_current_chapter():
-    if len(app_state.structure) <= 1: ui.notify('至少保留一章', type='warning'); return
     idx = app_state.current_chapter_idx
     chap_id = app_state.structure[idx]['id']
     with ui.dialog() as dialog, ui.card():
         ui.label(f'确认删除第 {chap_id} 章？').classes('text-h6')
+        ui.label('注意：这是最后一个章节时也会被删除').classes('text-red text-sm')
         async def confirm():
             await run.io_bound(manager.delete_chapter, chap_id)
             await run.io_bound(memory.delete_chapter_memory, chap_id)
             del app_state.structure[idx]
             await run.io_bound(manager.save_structure, app_state.structure)
-            await load_chapter(max(0, idx - 1))
+
+            # 如果还有章节，则加载相邻章节，否则清空编辑器
+            if app_state.structure:
+                new_idx = min(idx, len(app_state.structure)-1)
+                new_idx = max(0, new_idx)
+                await load_chapter(new_idx)
+            else:
+                # 没有章节时清空编辑器内容
+                if 'editor_title' in ui_refs and ui_refs['editor_title'] is not None:
+                    ui_refs['editor_title'].value = ""
+                if 'editor_outline' in ui_refs and ui_refs['editor_outline'] is not None:
+                    ui_refs['editor_outline'].value = ""
+                if 'editor_content' in ui_refs and ui_refs['editor_content'] is not None:
+                    ui_refs['editor_content'].value = ""
+                if 'char_count' in ui_refs and ui_refs['char_count'] is not None:
+                    ui_refs['char_count'].set_text("当前章节字数: 0")
+                app_state.current_chapter_idx = -1
+
             ui.notify('章节已删除', type='negative')
+            if app_state.refresh_sidebar: app_state.refresh_sidebar()
             dialog.close()
         ui.button('确认删除', on_click=confirm).props('color=red')
     dialog.open()
@@ -442,7 +509,7 @@ async def load_chapter(index):
     finally:
         # 3. 【核心修复】关闭加载锁
         # 使用 asyncio.sleep(0) 让出控制权，确保 UI 更新事件处理完毕后再解锁
-        await asyncio.sleep(0.05)  # 减少延迟时间以提高响应性
+        await asyncio.sleep(0.01)  # 减少延迟时间以提高响应性
         is_loading = False
 
 async def save_current_chapter():

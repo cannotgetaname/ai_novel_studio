@@ -183,24 +183,26 @@ class LibraryManager:
 
     def create_book(self, book_name):
         """创建新书结构"""
-        # 1. 净化文件名 (防止非法字符)
-        safe_name = "".join([c for c in book_name if c.isalpha() or c.isdigit() or c in (' ', '_', '-')]).strip()
+        # 1. 净化文件名 (防止非法字符和路径遍历攻击)
+        safe_name = "".join([c for c in book_name if c.isalnum() or c in (' ', '_', '-')]).strip()
+        # 防止路径遍历
+        safe_name = safe_name.replace("..", "").replace("/", "").replace("\\", "")
         if not safe_name: safe_name = f"Book_{datetime.now().strftime('%Y%m%d')}"
-        
+
         path = os.path.join(self.base_dir, safe_name)
-        
+
         # 2. 检查是否存在
         if os.path.exists(path): return False, "同名书籍已存在"
-        
+
         try:
             # 3. 创建目录
             os.makedirs(path)
-            
+
             # 4. 初始化该书的基础文件
             # 这里我们临时实例化一个 NovelManager 来帮我们生成文件结构
             # 注意：这里传入 project_root 让 Manager 知道去哪里初始化
             temp_mgr = NovelManager(project_root=path)
-            
+
             return True, safe_name
         except Exception as e:
             return False, str(e)
@@ -994,7 +996,10 @@ def sync_call_llm(prompt, system_prompt, task_type="writer"):
             temperature=temperature
         )
         return response.choices[0].message.content
-    except Exception as e: return f"Error: {str(e)}"
+    except Exception as e:
+        error_msg = f"Error: {str(e)}"
+        print(f"LLM调用失败: {error_msg}")
+        return error_msg
 
 def sync_rewrite_llm(selected_text, context_pre, context_post, instruction):
     task_type = "editor"
