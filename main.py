@@ -196,11 +196,11 @@ async def main_page():
                                 ui.separator().classes('w-full')
 
                                 # 按钮区
-                                def save_world_view():
+                                async def save_world_view():
                                     app_state.settings['world_view'] = world_editor.value
-                                    run.io_bound(manager.save_settings, app_state.settings)
+                                    await run.io_bound(manager.save_settings, app_state.settings)
                                     ui.notify('世界观已保存', type='positive')
-                                
+
                                 ui.button('保存设定', icon='save', on_click=save_world_view) \
                                     .props('color=green w-full unelevated')
                                 

@@ -141,8 +141,19 @@ def load_config():
     return {}
 
 CFG = load_config()
-# 初始化全局 client
-client = OpenAI(api_key=CFG.get('api_key'), base_url=CFG.get('base_url'))
+
+# 【修复】延迟初始化 OpenAI 客户端，避免启动时无 API key 崩溃
+client = None
+
+def get_client():
+    """获取或创建 OpenAI 客户端（延迟初始化）"""
+    global client
+    if client is None:
+        api_key = CFG.get('api_key')
+        if not api_key:
+            raise ValueError("未配置 API Key，请在系统配置中设置")
+        client = OpenAI(api_key=api_key, base_url=CFG.get('base_url'))
+    return client
 
 # 【新增】保存配置并热重载
 def save_global_config(new_config):
@@ -151,13 +162,14 @@ def save_global_config(new_config):
         # 1. 写入文件
         with open("config.json", 'w', encoding='utf-8') as f:
             json.dump(new_config, f, ensure_ascii=False, indent=4)
-        
+
         # 2. 热更新内存中的配置
         CFG.update(new_config)
-        
-        # 3. 重置 OpenAI 客户端 (这一步很关键，否则改了 Key 不生效)
-        client = OpenAI(api_key=CFG.get('api_key'), base_url=CFG.get('base_url'))
-        
+
+        # 3. 重置 OpenAI 客户端为 None，下次调用 get_client() 时会重新创建
+        # 这样可以确保使用新的 API Key 和 base_url
+        client = None
+
         return "✅ 配置已保存，系统已热重载"
     except Exception as e:
         return f"❌ 保存失败: {str(e)}"
@@ -215,9 +227,10 @@ class LibraryManager:
         if not os.path.exists(old_path):
             return False, "原书籍不存在"
 
-        # 2. 净化新书名 (防止非法字符)
-        safe_new_name = "".join([c for c in new_name if c.isalpha() or c.isdigit() or c in (' ', '_', '-')]).strip()
-        if not safe_new_name: 
+        # 2. 净化新书名 (防止非法字符，但保留中文)
+        # 允许：字母、数字、中文、空格、下划线、连字符
+        safe_new_name = "".join([c for c in new_name if c.isalnum() or c in (' ', '_', '-') or '\u4e00' <= c <= '\u9fff']).strip()
+        if not safe_new_name:
             return False, "新书名无效"
         
         new_path = os.path.join(self.base_dir, safe_new_name)
@@ -707,15 +720,17 @@ class NovelManager:
         sys_prompt = CFG['prompts'].get('inspiration_assistant_system', "你是一个网文灵感助手。请只返回请求的内容，不要废话。")
         
         try:
-            # 使用已有的 client
-            if not client: return "错误：未配置 API Key"
-            
-            response = client.chat.completions.create(
+            # 使用 get_client() 获取客户端
+            current_client = get_client()
+
+            response = current_client.chat.completions.create(
                 model=CFG['models'].get('writer', 'gpt-3.5-turbo'), # 借用 writer 模型
                 messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
                 temperature=0.9 # 灵感需要高创造性
             )
             return response.choices[0].message.content
+        except ValueError as e:
+            return f"错误: {str(e)}"
         except Exception as e:
             return f"生成失败: {str(e)}"
     # --- 大纲树 (Blueprint) 管理 ---
@@ -989,13 +1004,16 @@ def sync_call_llm(prompt, system_prompt, task_type="writer"):
     temperature = CFG['temperatures'].get(task_type, 1.3)
     print(f"\n[LLM Router] 任务: {task_type} | 模型: {model_name}")
     try:
-        response = client.chat.completions.create(
+        current_client = get_client()
+        response = current_client.chat.completions.create(
             model=model_name,
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
             stream=False,
             temperature=temperature
         )
         return response.choices[0].message.content
+    except ValueError as e:
+        return f"Error: {str(e)}"
     except Exception as e:
         error_msg = f"Error: {str(e)}"
         print(f"LLM调用失败: {error_msg}")
@@ -1007,14 +1025,18 @@ def sync_rewrite_llm(selected_text, context_pre, context_post, instruction):
     temperature = CFG['temperatures'].get(task_type, 0.7)
     prompt = f"【任务】重写文本。\n【上文】...{context_pre[-500:]}\n【待修改】{selected_text}\n【下文】{context_post[:500]}...\n【要求】{instruction}"
     try:
-        response = client.chat.completions.create(
+        current_client = get_client()
+        response = current_client.chat.completions.create(
             model=model_name,
             messages=[{"role": "system", "content": "专业编辑"}, {"role": "user", "content": prompt}],
             stream=False,
             temperature=temperature
         )
         return response.choices[0].message.content
-    except Exception as e: return f"Error: {str(e)}"
+    except ValueError as e:
+        return f"Error: {str(e)}"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 def sync_review_chapter(content, context_str):
     task_type = "reviewer"
@@ -1023,14 +1045,18 @@ def sync_review_chapter(content, context_str):
     sys_prompt = CFG['prompts'].get('reviewer_system', "你是一个严厉的编辑。")
     prompt = f"【待审查正文】\n{content}\n【参考设定】\n{context_str}\n【任务】审查逻辑一致性、剧情节奏、文笔。输出Markdown报告。"
     try:
-        response = client.chat.completions.create(
+        current_client = get_client()
+        response = current_client.chat.completions.create(
             model=model_name,
             messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
             stream=False,
             temperature=temperature
         )
         return response.choices[0].message.content
-    except Exception as e: return f"Error: {str(e)}"
+    except ValueError as e:
+        return f"Error: {str(e)}"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 def sync_analyze_time(content, prev_time_label):
     task_type = "timekeeper"
@@ -1039,14 +1065,18 @@ def sync_analyze_time(content, prev_time_label):
     sys_prompt = CFG['prompts'].get('timekeeper_system', "你是一个时间记录员。")
     prompt = f"【上一章时间】{prev_time_label}\n【本章正文】{content[:3000]}...\n【任务】1.分析时间流逝 2.推算当前时间 3.提取事件\n【输出格式】严格JSON: {{\"label\": \"...\", \"duration\": \"...\", \"events\": [\"...\"]}}"
     try:
-        response = client.chat.completions.create(
+        current_client = get_client()
+        response = current_client.chat.completions.create(
             model=model_name,
             messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
             stream=False,
             temperature=temperature
         )
         return response.choices[0].message.content
-    except Exception as e: return f"Error: {str(e)}"
+    except ValueError as e:
+        return f"Error: {str(e)}"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 # 【修改】状态分析接口：增加提取“地点连接”的指令
 def sync_analyze_state(content, current_data_summary):
@@ -1088,14 +1118,18 @@ def sync_analyze_state(content, current_data_summary):
     """
     print(f"\n[LLM Router] 任务: State Auditor | 模型: {model_name}")
     try:
-        response = client.chat.completions.create(
+        current_client = get_client()
+        response = current_client.chat.completions.create(
             model=model_name,
             messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
             stream=False,
             temperature=temperature
         )
         return response.choices[0].message.content
-    except Exception as e: return f"Error: {str(e)}"
+    except ValueError as e:
+        return f"Error: {str(e)}"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 # 【修改】应用变更：增加处理“地点连接”的逻辑
 def apply_state_changes(novel_manager, changes):

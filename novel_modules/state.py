@@ -201,11 +201,8 @@ ui_refs = {
     'char_count': None, 'total_count': None,
     'char_view_mode': None, 'char_graph_container': None,
     'time_label': None, 'time_events': None, 'timeline_container': None,
-    'save_status': None,  # 【新增】用于显示自动保存状态
-    'time_label': None, 'time_events': None, 'timeline_container': None,
     'save_status': None, 'config_container': None,
-    
     # 【新增】地点视图控制
-    'loc_view_mode': None, 
+    'loc_view_mode': None,
     'loc_graph_container': None
 }

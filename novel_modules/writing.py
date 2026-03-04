@@ -12,6 +12,7 @@ last_backup_time = 0
 # ================= 全局变量 =================
 auto_save_timer = None
 is_loading = False  # 【核心修复】加载锁：防止加载数据时触发自动保存
+is_undo_redo_operation = False  # 【修复】撤销/重做操作标记：必须在 handle_text_change 使用前定义
 
 # ================= 辅助函数 =================
 
