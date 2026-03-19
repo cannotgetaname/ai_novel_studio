@@ -19,3 +19,6 @@ config.json
 # IDE 配置 (可选)
 .vscode/
 .idea/
+logs/
+backups/
+.claude

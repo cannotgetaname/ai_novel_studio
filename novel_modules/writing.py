@@ -688,16 +688,52 @@ async def generate_content():
 
     ui.notify('AI 正在沉浸式思考...', type='info', spinner=True)
 
-    # 调用 writer 模型
-    res = await run.io_bound(backend.sync_call_llm, prompt, CFG['prompts']['writer_system'], task_type="writer")
+    # 调用 writer 模型 (流式输出)
+    content_ref = ui_refs.get('editor_content')
+    full_text = ""
+    has_error = False
 
-    if "Error" in res:
-        ui.notify(res, type='negative')
-    else:
-        content_ref = ui_refs.get('editor_content')
-        if content_ref:
-            content_ref.value = res
-            update_char_count()
+    # 使用后台线程运行流式生成器
+    import queue
+    import threading
+
+    text_queue = queue.Queue()
+    stream_done = object()  # 结束标记
+
+    def run_stream():
+        try:
+            for chunk in backend.stream_call_llm(prompt, CFG['prompts']['writer_system'], task_type="writer"):
+                text_queue.put(chunk)
+        except Exception as e:
+            text_queue.put(f"Error: {str(e)}")
+        finally:
+            text_queue.put(stream_done)
+
+    # 启动后台线程
+    thread = threading.Thread(target=run_stream, daemon=True)
+    thread.start()
+
+    # 在主协程中消费队列并更新UI
+    while thread.is_alive() or not text_queue.empty():
+        try:
+            chunk = text_queue.get(timeout=0.05)
+            if chunk is stream_done:
+                break
+            if chunk.startswith("Error:"):
+                ui.notify(chunk, type='negative')
+                has_error = True
+                break
+            full_text += chunk
+            if content_ref:
+                content_ref.value = full_text
+            # 让出控制权，允许UI更新
+            await asyncio.sleep(0.01)
+        except queue.Empty:
+            await asyncio.sleep(0.01)
+            continue
+
+    if not has_error:
+        update_char_count()
         ui.notify('生成完毕！已融合图谱记忆。', type='positive')
 
 async def open_history_dialog():
@@ -761,10 +797,48 @@ async def open_rewrite_dialog():
         async def confirm():
             ui.notify('AI 重写中...', spinner=True); dialog.close()
             pre, post = full_text[:start], full_text[end:]
-            new_text = await run.io_bound(backend.sync_rewrite_llm, selected_text, pre, post, instruction.value)
-            if "Error" in new_text: ui.notify('失败', type='negative')
-            else:
-                if content_ref: content_ref.value = pre + new_text + post
+
+            # 流式输出重写
+            new_text = ""
+            has_error = False
+
+            import queue
+            import threading
+
+            text_queue = queue.Queue()
+            stream_done = object()
+
+            def run_stream():
+                try:
+                    for chunk in backend.stream_rewrite_llm(selected_text, pre, post, instruction.value):
+                        text_queue.put(chunk)
+                except Exception as e:
+                    text_queue.put(f"Error: {str(e)}")
+                finally:
+                    text_queue.put(stream_done)
+
+            thread = threading.Thread(target=run_stream, daemon=True)
+            thread.start()
+
+            while thread.is_alive() or not text_queue.empty():
+                try:
+                    chunk = text_queue.get(timeout=0.05)
+                    if chunk is stream_done:
+                        break
+                    if chunk.startswith("Error:"):
+                        ui.notify('失败: ' + chunk, type='negative')
+                        has_error = True
+                        break
+                    new_text += chunk
+                    if content_ref:
+                        content_ref.value = pre + new_text + post
+                    await asyncio.sleep(0.01)
+                except queue.Empty:
+                    await asyncio.sleep(0.01)
+                    continue
+
+            if not has_error:
+                update_char_count()
                 ui.notify('完成', type='positive')
         ui.button('开始重写', on_click=confirm).props('color=purple')
     dialog.open()
@@ -776,18 +850,66 @@ async def open_review_dialog():
     ui.notify('主编正在审稿...', spinner=True)
     ctx = f"【世界观】{app_state.settings['world_view']}\n"
     for c in app_state.characters: ctx += f"- {c['name']}: {c['status']}, {c['role']}\n"
-    report = await run.io_bound(backend.sync_review_chapter, content, ctx)
-    idx = app_state.current_chapter_idx
-    app_state.structure[idx]['review_report'] = report
-    await run.io_bound(manager.save_structure, app_state.structure)
-    review_panel_ref = ui_refs.get('review_panel')
-    if review_panel_ref:
-        review_panel_ref.clear()
-        with review_panel_ref: ui.markdown(report).classes('w-full text-sm p-2')
+
+    # 流式输出审稿报告
+    report = ""
+    has_error = False
+
+    import queue
+    import threading
+
+    text_queue = queue.Queue()
+    stream_done = object()
+
+    def run_stream():
+        try:
+            for chunk in backend.stream_review_chapter(content, ctx):
+                text_queue.put(chunk)
+        except Exception as e:
+            text_queue.put(f"Error: {str(e)}")
+        finally:
+            text_queue.put(stream_done)
+
+    thread = threading.Thread(target=run_stream, daemon=True)
+    thread.start()
+
+    # 先准备一个对话框用于实时显示
     with ui.dialog() as d, ui.card().classes('w-2/3 h-3/4'):
         ui.label('📋 审稿报告').classes('text-h6')
-        with ui.scroll_area().classes('w-full flex-grow'): ui.markdown(report)
+        with ui.scroll_area().classes('w-full flex-grow') as scroll_area:
+            report_display = ui.markdown("").classes('w-full text-sm p-2')
     d.open()
+
+    # 消费队列并更新UI
+    while thread.is_alive() or not text_queue.empty():
+        try:
+            chunk = text_queue.get(timeout=0.05)
+            if chunk is stream_done:
+                break
+            if chunk.startswith("Error:"):
+                ui.notify('失败: ' + chunk, type='negative')
+                has_error = True
+                break
+            report += chunk
+            report_display.set_content(report)
+            await asyncio.sleep(0.01)
+        except queue.Empty:
+            await asyncio.sleep(0.01)
+            continue
+
+    if not has_error:
+        # 保存报告
+        idx = app_state.current_chapter_idx
+        app_state.structure[idx]['review_report'] = report
+        await run.io_bound(manager.save_structure, app_state.structure)
+
+        # 更新侧边栏
+        review_panel_ref = ui_refs.get('review_panel')
+        if review_panel_ref:
+            review_panel_ref.clear()
+            with review_panel_ref: ui.markdown(report).classes('w-full text-sm p-2')
+
+        ui.notify('审稿完成', type='positive')
 
 async def open_state_audit_dialog():
     content_ref = ui_refs.get('editor_content')

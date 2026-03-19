@@ -1,5 +1,6 @@
 import json
 import os
+import asyncio
 import chromadb
 from chromadb.utils import embedding_functions
 from openai import OpenAI
@@ -1019,6 +1020,55 @@ def sync_call_llm(prompt, system_prompt, task_type="writer"):
         print(f"LLM调用失败: {error_msg}")
         return error_msg
 
+def stream_call_llm(prompt, system_prompt, task_type="writer"):
+    """流式调用 LLM，返回生成器（同步生成器）"""
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 1.3)
+    print(f"\n[LLM Router - Stream] 任务: {task_type} | 模型: {model_name}")
+    try:
+        current_client = get_client()
+        stream = current_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
+            stream=True,
+            temperature=temperature
+        )
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except ValueError as e:
+        yield f"Error: {str(e)}"
+    except Exception as e:
+        error_msg = f"Error: {str(e)}"
+        print(f"LLM流式调用失败: {error_msg}")
+        yield error_msg
+
+async def async_stream_call_llm(prompt, system_prompt, task_type="writer"):
+    """异步流式调用 LLM，返回异步生成器（适用于 NiceGUI）"""
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 1.3)
+    print(f"\n[LLM Router - Async Stream] 任务: {task_type} | 模型: {model_name}")
+    try:
+        current_client = get_client()
+        stream = await asyncio.to_thread(
+            lambda: current_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
+                stream=True,
+                temperature=temperature
+            )
+        )
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+            await asyncio.sleep(0)  # 让出控制权
+    except ValueError as e:
+        yield f"Error: {str(e)}"
+    except Exception as e:
+        error_msg = f"Error: {str(e)}"
+        print(f"LLM异步流式调用失败: {error_msg}")
+        yield error_msg
+
 def sync_rewrite_llm(selected_text, context_pre, context_post, instruction):
     task_type = "editor"
     model_name = CFG['models'].get(task_type, "deepseek-chat")
@@ -1037,6 +1087,28 @@ def sync_rewrite_llm(selected_text, context_pre, context_post, instruction):
         return f"Error: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
+
+def stream_rewrite_llm(selected_text, context_pre, context_post, instruction):
+    """流式调用重写 LLM，返回生成器"""
+    task_type = "editor"
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 0.7)
+    prompt = f"【任务】重写文本。\n【上文】...{context_pre[-500:]}\n【待修改】{selected_text}\n【下文】{context_post[:500]}...\n【要求】{instruction}"
+    try:
+        current_client = get_client()
+        stream = current_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "system", "content": "专业编辑"}, {"role": "user", "content": prompt}],
+            stream=True,
+            temperature=temperature
+        )
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except ValueError as e:
+        yield f"Error: {str(e)}"
+    except Exception as e:
+        yield f"Error: {str(e)}"
 
 def sync_review_chapter(content, context_str):
     task_type = "reviewer"
@@ -1057,6 +1129,29 @@ def sync_review_chapter(content, context_str):
         return f"Error: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
+
+def stream_review_chapter(content, context_str):
+    """流式调用审稿 LLM，返回生成器"""
+    task_type = "reviewer"
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 0.5)
+    sys_prompt = CFG['prompts'].get('reviewer_system', "你是一个严厉的编辑。")
+    prompt = f"【待审查正文】\n{content}\n【参考设定】\n{context_str}\n【任务】审查逻辑一致性、剧情节奏、文笔。输出Markdown报告。"
+    try:
+        current_client = get_client()
+        stream = current_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
+            stream=True,
+            temperature=temperature
+        )
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except ValueError as e:
+        yield f"Error: {str(e)}"
+    except Exception as e:
+        yield f"Error: {str(e)}"
 
 def sync_analyze_time(content, prev_time_label):
     task_type = "timekeeper"
