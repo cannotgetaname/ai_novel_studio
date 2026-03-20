@@ -82,6 +82,8 @@ try:
         ui_refs['config_container'] = None
         ui_refs['loc_view_mode'] = None
         ui_refs['loc_graph_container'] = None
+        ui_refs['api_container'] = None
+        ui_refs['prompts_container'] = None
 
         # 2. 定义辅助函数
         async def refresh_total_word_count():
@@ -219,7 +221,8 @@ try:
                         t_char = ui.tab('人物')
                         t_item = ui.tab('物品')
                         t_loc = ui.tab('地点')
-                        t_config = ui.tab('系统配置')
+                        t_api = ui.tab('API与模型')
+                        t_prompts = ui.tab('提示词管理')
 
                     # 二级 Tab Panels
                     with ui.tab_panels(set_tabs, value=t_world).classes('w-full flex-grow h-0'):
@@ -365,11 +368,17 @@ try:
                                     ui_refs['loc_graph_container'] = ui.column().classes('w-full h-full')
                                 settings.refresh_loc_ui()
 
-                        # 2.5 配置
-                        with ui.tab_panel(t_config).classes('h-full w-full p-2 flex flex-col'):
+                        # 2.5 API与模型
+                        with ui.tab_panel(t_api).classes('h-full w-full p-2 flex flex-col'):
                             with ui.scroll_area().classes('w-full flex-grow'):
-                                ui_refs['config_container'] = ui.column().classes('w-full')
-                                settings.refresh_config_ui()
+                                ui_refs['api_container'] = ui.column().classes('w-full')
+                                settings.refresh_api_ui()
+
+                        # 2.6 提示词管理
+                        with ui.tab_panel(t_prompts).classes('h-full w-full p-2 flex flex-col'):
+                            with ui.scroll_area().classes('w-full flex-grow'):
+                                ui_refs['prompts_container'] = ui.column().classes('w-full')
+                                settings.refresh_prompts_ui()
 
                 # --- Tab 3: 图谱 ---
                 with ui.tab_panel(t_graph).classes('h-full w-full p-0 flex flex-col'):

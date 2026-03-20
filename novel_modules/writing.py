@@ -538,11 +538,23 @@ async def save_current_chapter():
     }
 
     ui.notify('正在执行完整保存...', type='info')
+    print(f"\n[完整保存] 章节: 第{chapter['id']}章 - {chapter.get('title', '未命名')}")
+    print(f"[完整保存] 标题: {chapter['title']}")
+    print(f"[完整保存] 大纲长度: {len(chapter['outline'])}")
+    print(f"[完整保存] 正文长度: {len(new_content)}")
+
     await run.io_bound(manager.save_chapter_content, chapter['id'], new_content)
+    print("[完整保存] 章节内容已写入磁盘")
+
     # 【新增】创建历史快照
     await run.io_bound(manager.create_chapter_snapshot, chapter['id'], new_content)
+    print("[完整保存] 历史快照已创建")
+
     await run.io_bound(manager.save_structure, app_state.structure)
+    print("[完整保存] 目录结构已保存")
+
     await run.io_bound(memory.add_chapter_memory, chapter['id'], new_content)
+    print("[完整保存] RAG记忆库已更新")
 
     ui.notify('✅ 保存成功！记忆库已更新。', type='positive')
     save_status_ref = ui_refs.get('save_status')
@@ -550,15 +562,23 @@ async def save_current_chapter():
 
     current_client = ui.context.client
     async def background_update_summaries(chap_id, text, client):
+        print(f"\n[后台任务] 开始生成第{chap_id}章摘要...")
         summary = await run.io_bound(manager.update_chapter_summary, chap_id, text)
         if "Error" not in summary:
+            print(f"[后台任务] 第{chap_id}章摘要生成成功")
             with client:
                 ui.notify(f'第{chap_id}章摘要已更新', type='positive')
+            print("[后台任务] 开始生成全书剧情总纲...")
             global_sum = await run.io_bound(manager.update_global_summary)
             if "Error" not in global_sum:
+                print(f"[后台任务] 全书剧情总纲生成成功，长度: {len(global_sum)}")
                 app_state.settings['book_summary'] = global_sum
                 with client:
                     ui.notify('📚 全书剧情总纲已刷新', type='positive')
+            else:
+                print(f"[后台任务] 全书剧情总纲生成失败: {global_sum}")
+        else:
+            print(f"[后台任务] 第{chap_id}章摘要生成失败: {summary}")
 
     asyncio.create_task(background_update_summaries(chapter['id'], new_content, current_client))
 
@@ -683,7 +703,8 @@ async def generate_content():
     要求：
     1. 逻辑严密，注意利用【关系网】中的设定（如持有物品、人际恩怨）。
     2. 风格契合世界观，多用展示而非讲述。
-    3. 篇幅适中，节奏紧凑。
+    3. 篇幅要求：正文必须在 2000-4000 字之间，请充分展开情节，不要草草收尾。
+    4. 细节丰富：每场戏都要有具体的环境描写、人物动作、对话互动。
     """
 
     ui.notify('AI 正在沉浸式思考...', type='info', spinner=True)
@@ -692,6 +713,13 @@ async def generate_content():
     content_ref = ui_refs.get('editor_content')
     full_text = ""
     has_error = False
+
+    print(f"\n[写作生成] 章节标题: {title}")
+    print(f"[写作生成] 大纲长度: {len(outline)}")
+    print(f"[写作生成] 世界观长度: {len(app_state.settings.get('world_view', ''))}")
+    print(f"[写作生成] 人物上下文长度: {len(char_prompt_str)}")
+    print(f"[写作生成] 图谱上下文长度: {len(graph_context)}")
+    print(f"[写作生成] RAG上下文长度: {len(filtered_context)}")
 
     # 使用后台线程运行流式生成器
     import queue
@@ -702,9 +730,10 @@ async def generate_content():
 
     def run_stream():
         try:
-            for chunk in backend.stream_call_llm(prompt, CFG['prompts']['writer_system'], task_type="writer"):
+            for chunk in backend.stream_call_llm(prompt, backend.get_prompt('writer_system'), task_type="writer"):
                 text_queue.put(chunk)
         except Exception as e:
+            print(f"[写作生成] 流式调用异常: {str(e)}")
             text_queue.put(f"Error: {str(e)}")
         finally:
             text_queue.put(stream_done)

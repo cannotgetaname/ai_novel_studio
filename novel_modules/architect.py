@@ -733,12 +733,12 @@ async def call_ai_and_preview(prompt, action_type, **kwargs):
                 ui.label(fission_info['description']).classes('text-sm text-gray-400')
 
         result_area.open()
-        
+
         try:
-            print(">>> [DEBUG] C. 请求后端 LLM...")
+            print("\n[架构师-裂变] 请求 LLM 生成节点...")
             # 调用后端
-            res = await run.io_bound(backend.sync_call_llm, prompt, CFG['prompts']['json_only_architect_system'], "architect")
-            print(f">>> [DEBUG] D. 后端返回: {len(res)} chars")
+            res = await run.io_bound(backend.sync_call_llm, prompt, backend.get_prompt('json_only_architect_system'), "architect")
+            print(f"[架构师-裂变] LLM 返回: {len(res)} chars")
             
             # JSON 解析
             clean_json = res.replace("```json", "").replace("```", "").strip()
@@ -746,7 +746,7 @@ async def call_ai_and_preview(prompt, action_type, **kwargs):
             if start != -1 and end != -1: clean_json = clean_json[start:end+1]
             data = json.loads(clean_json)
             
-            print(f">>> [DEBUG] F. 解析成功: {len(data)} 条")
+            print(f"[架构师-裂变] 解析成功: {len(data)} 条")
 
             # ==========================================
             # 【核心修复】直接清空容器，从头绘制结果
@@ -941,10 +941,10 @@ async def generate_world_view_preview(prompt):
         result_area.open()
 
         try:
-            print(">>> [DEBUG] C. 请求后端 LLM...")
+            print("\n[架构师-世界观] 请求 LLM 生成世界观...")
             # 调用后端生成世界观
-            res = await run.io_bound(backend.sync_call_llm, prompt, CFG['prompts']['writer_system'], "architect")
-            print(f">>> [DEBUG] D. 后端返回: {len(res)} chars")
+            res = await run.io_bound(backend.sync_call_llm, prompt, backend.get_prompt('writer_system'), "architect")
+            print(f"[架构师-世界观] LLM 返回: {len(res)} chars")
 
             # ==========================================
             # 【核心修复】直接清空容器，从头绘制结果

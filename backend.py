@@ -58,7 +58,7 @@ class WorldGraph:
             if i.get('owner'):
                 self.G.add_edge(i['owner'], i['name'], relation="持有", weight=3)
 
-    # --- GraphRAG 功能：获取某人的“关系网文本” ---
+    # --- GraphRAG 功能：获取某人的"关系网文本" ---
     def get_context_text(self, center_node, hops=1):
         if center_node not in self.G: return ""
         
@@ -142,6 +142,28 @@ def load_config():
     return {}
 
 CFG = load_config()
+
+# ================= 默认提示词配置 =================
+DEFAULT_PROMPTS = {
+    "writer_system": "你是一个顶级网文作家，擅长热血、快节奏、爽点密集的风格。写作要求：\n1. 【黄金法则】多用\"展示\"而非\"讲述\"（Show, don't tell）。\n2. 【对话驱动】通过对话推动剧情和塑造性格，拒绝大段枯燥的心理描写。\n3. 【感官描写】调动视觉、听觉、触觉，增加代入感。\n4. 【节奏把控】详略得当，战斗场面要干脆利落，日常互动要有趣味。\n5. 【字数要求】每章正文必须在 2000-4000 字之间，这是硬性要求，不可偷工减料。\n请根据提供的大纲、世界观和上下文，撰写引人入胜的正文。",
+    "architect_system": "你是一个精通起承转合的剧情架构师。你的任务是基于前文和伏笔，规划后续章节。要求：\n1. 【逻辑严密】后续剧情必须符合人物性格逻辑，不能机械降神。\n2. 【冲突制造】每一章都必须有一个核心冲突或悬念钩子。\n3. 【伏笔回收】尝试利用历史记忆中的伏笔。\n请严格只返回一个标准的 JSON 列表，不要包含 Markdown 标记或其他废话。",
+    "json_only_architect_system": "你是一个只输出JSON的架构师。",
+    "knowledge_filter_system": "你是一个专业的资料整理助手。你的任务是从检索到的碎片信息中，剔除无关噪音，筛选出对当前章节写作真正有帮助的背景信息（如人物之前的恩怨、物品的特殊设定、地点的具体样貌）。如果片段与当前剧情无关，请忽略。",
+    "reviewer_system": "你是一个以毒舌著称的严厉网文主编。请从以下维度审查正文：\n1. 【人设一致性】人物言行是否符合其性格和身份？\n2. 【剧情逻辑】是否有前后矛盾或不合理的转折？\n3. 【爽点节奏】是否过于拖沓？是否有期待感？\n请输出一份 Markdown 格式的报告，不仅要指出问题，还要给出具体的修改建议。",
+    "timekeeper_system": "你是一个精确的时间记录员。你的任务是分析正文，推算时间流逝。输出必须是严格的 JSON 格式：{\"label\": \"当前时间点(如：修仙历10年春)\", \"duration\": \"本章经过的时间(如：3天)\", \"events\": [\"事件1\", \"事件2\"]}。请只输出 JSON。",
+    "auditor_system": "你是一个世界观数据库管理员。你的任务是分析小说正文，提取状态变更。你需要敏锐地捕捉隐性信息（例如：'他断了一臂' -> 状态: 重伤/残疾）。\n\n请严格按以下 JSON 结构输出（不要使用 Markdown 代码块）：\n{\"char_updates\": [...], \"item_updates\": [...], \"new_chars\": [...], \"new_items\": [...], \"new_locs\": [...], \"relation_updates\": [...]}",
+    "summary_chapter_system": "你是一个专业的网文编辑，擅长提炼剧情精华。请将给定的小说章节压缩成 150 字以内的摘要。要求：\n1. 保留核心冲突和结果。\n2. 记录关键道具或人物的获得/损失。\n3. 记录重要的伏笔。\n不要写流水账，要写干货。",
+    "summary_book_system": "你是一个资深主编，拥有宏观的上帝视角。请根据各章节的摘要，梳理出整本书目前的剧情脉络（Story Arc）。要求：\n1. 串联主要故事线，忽略支线细枝末节。\n2. 明确主角目前的处境、目标和成长阶段。\n3. 篇幅控制在 500 字左右，适合快速回顾。",
+    "inspiration_assistant_system": "你是一个网文灵感助手。请只返回请求的内容，不要废话。"
+}
+
+def get_prompt(key):
+    """安全获取提示词，优先从配置读取，否则返回默认值"""
+    return CFG.get('prompts', {}).get(key, DEFAULT_PROMPTS.get(key, ""))
+
+def get_default_prompts():
+    """返回默认提示词配置"""
+    return DEFAULT_PROMPTS.copy()
 
 # 【修复】延迟初始化 OpenAI 客户端，避免启动时无 API key 崩溃
 client = None
@@ -488,22 +510,31 @@ class NovelManager:
             processed_snippets.append(snippet)
         
         context_block = "\n\n".join(processed_snippets)
-        sys_prompt = CFG['prompts'].get('knowledge_filter_system', "请筛选有用的背景信息。")
+        sys_prompt = get_prompt('knowledge_filter_system')
         filter_prompt = f"【本章大纲】{query}\n【检索片段】\n{context_block}\n【任务】筛选有用背景，忽略[SKIP-RECENT]，合并重复，输出简练背景。"
+        print(f"\n[知识过滤] 检索片段数: {len(processed_snippets)} | 大纲长度: {len(query)}")
         filtered_context = sync_call_llm(filter_prompt, sys_prompt, task_type="editor")
+        print(f"[知识过滤] 完成，过滤后长度: {len(filtered_context)}")
         return filtered_context, debug_info
-    
+
     def update_chapter_summary(self, chapter_id, content):
-        if len(content) < 100: return ""
-        sys_prompt = CFG['prompts'].get('summary_chapter_system', "请总结章节。")
+        if len(content) < 100:
+            print(f"[章节摘要] 第{chapter_id}章内容太短({len(content)}字)，跳过生成")
+            return ""
+        sys_prompt = get_prompt('summary_chapter_system')
         prompt = f"请阅读以下小说章节，用 150 字以内的篇幅，高度概括本章发生的**核心剧情**、**关键转折**和**重要伏笔**。\n\n【正文】\n{content[:4000]}"
-        summary = sync_call_llm(prompt, sys_prompt, task_type="writer")
+        print(f"\n[章节摘要] 第{chapter_id}章 | 正文长度: {len(content)}")
+        summary = sync_call_llm(prompt, sys_prompt, task_type="summary")
+        if "Error" in summary:
+            print(f"[章节摘要] 生成失败: {summary}")
+            return summary
         structure = self.load_structure()
         for chap in structure:
             if chap['id'] == chapter_id:
                 chap['summary'] = summary
                 break
         self.save_structure(structure)
+        print(f"[章节摘要] 完成，摘要长度: {len(summary)}")
         return summary
 
     def update_global_summary(self):
@@ -512,14 +543,21 @@ class NovelManager:
         for chap in structure:
             if chap.get('summary'):
                 all_summaries.append(f"第{chap['id']}章: {chap['summary']}")
-        if not all_summaries: return "暂无剧情。"
+        if not all_summaries:
+            print("[全书总结] 暂无章节摘要，跳过生成")
+            return "暂无剧情。"
         combined_text = "\n".join(all_summaries)
-        sys_prompt = CFG['prompts'].get('summary_book_system', "请总结全书。")
+        sys_prompt = get_prompt('summary_book_system')
         prompt = f"以下是这就本小说目前的**分章剧情摘要**：\n{combined_text}\n【任务】请根据以上分章摘要，写一份**全书目前的剧情总纲**（500字左右）。"
-        global_summary = sync_call_llm(prompt, sys_prompt, task_type="architect")
+        print(f"\n[全书总结] 汇总 {len(all_summaries)} 章摘要")
+        global_summary = sync_call_llm(prompt, sys_prompt, task_type="summary")
+        if "Error" in global_summary:
+            print(f"[全书总结] 生成失败: {global_summary}")
+            return global_summary
         settings = self.load_settings()
         settings['book_summary'] = global_summary
         self.save_settings(settings)
+        print(f"[全书总结] 完成，总纲长度: {len(global_summary)}")
         return global_summary
     # 【新增】全局搜索
     def global_search(self, term):
@@ -711,15 +749,16 @@ class NovelManager:
             "name_skill": "请生成 10 个炫酷的功法或武技名称，如：佛怒火莲、大荒囚天指。只返回名字，用逗号分隔。",
             "name_item": "请生成 10 个传说级法宝或丹药名称，只返回名字，用逗号分隔。",
             "plot_twist": f"基于当前世界观：{context[:200]}...，请构思 3 个意想不到的剧情转折或突发事件，用于打破当前的平淡剧情。每个点子 50 字以内。",
-            "gold_finger": "请脑洞大开，生成 5 个独特且爽点十足的网文“金手指”或“系统”设定。简短描述。"
+            "gold_finger": "请脑洞大开，生成 5 个独特且爽点十足的网文「金手指」或「系统」设定。简短描述。"
         }
         
         prompt = prompts.get(type_key, "请随机生成一些灵感。")
-        
+
         # 2. 调用 LLM (复用已有的 sync_call_llm，注意这里其实应该用异步，但为了代码简单复用 io_bound)
         # 这里我们临时构造一个 system prompt
-        sys_prompt = CFG['prompts'].get('inspiration_assistant_system', "你是一个网文灵感助手。请只返回请求的内容，不要废话。")
-        
+        sys_prompt = get_prompt('inspiration_assistant_system')
+
+        print(f"\n[灵感生成] 类型: {type_key}")
         try:
             # 使用 get_client() 获取客户端
             current_client = get_client()
@@ -729,10 +768,14 @@ class NovelManager:
                 messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
                 temperature=0.9 # 灵感需要高创造性
             )
-            return response.choices[0].message.content
+            result = response.choices[0].message.content
+            print(f"[灵感生成] 完成，结果长度: {len(result)}")
+            return result
         except ValueError as e:
+            print(f"[灵感生成] ValueError: {str(e)}")
             return f"错误: {str(e)}"
         except Exception as e:
+            print(f"[灵感生成] Exception: {str(e)}")
             return f"生成失败: {str(e)}"
     # --- 大纲树 (Blueprint) 管理 ---
     def load_outline_tree(self):
@@ -772,7 +815,7 @@ class NovelManager:
         else:
             return "错误：无法继续拆分章节"
 
-        sys_prompt = CFG['prompts']['architect_system']
+        sys_prompt = get_prompt('architect_system')
         prompt += "\n【格式要求】严格返回JSON列表：[{'label': '标题', 'desc': '详细细纲'}, ...]"
 
         # 2. 调用 LLM (复用 sync_call_llm)
@@ -1000,25 +1043,90 @@ class MemoryManager:
 
 # ================= LLM 调用接口 =================
 
+def classify_error(error):
+    """分类错误类型，返回 (错误类型, 是否可重试, 详细信息)"""
+    error_str = str(error).lower()
+    error_type = type(error).__name__
+
+    # 连接错误 - 可重试
+    if any(x in error_str for x in ['connection', 'connect', 'network', 'socket', 'timeout', 'timed out']):
+        return ('CONNECTION_ERROR', True, f'网络连接问题: {error}')
+
+    # API 错误 - 通常不可重试
+    if 'api' in error_str or 'key' in error_str or 'auth' in error_str:
+        if 'rate' in error_str or 'limit' in error_str:
+            return ('RATE_LIMIT', True, f'API 限流: {error}')
+        if 'invalid' in error_str or 'unauthorized' in error_str:
+            return ('AUTH_ERROR', False, f'认证失败: {error}')
+        return ('API_ERROR', False, f'API 错误: {error}')
+
+    # 超时错误 - 可重试
+    if 'timeout' in error_str:
+        return ('TIMEOUT', True, f'请求超时: {error}')
+
+    # JSON 解析错误 - 不可重试（需要重新生成或修复prompt）
+    if 'json' in error_str or 'decode' in error_str or 'parse' in error_str:
+        return ('PARSE_ERROR', False, f'解析失败: {error}')
+
+    # 其他错误
+    return ('UNKNOWN_ERROR', False, f'未知错误 ({error_type}): {error}')
+
 def sync_call_llm(prompt, system_prompt, task_type="writer"):
     model_name = CFG['models'].get(task_type, "deepseek-chat")
     temperature = CFG['temperatures'].get(task_type, 1.3)
     print(f"\n[LLM Router] 任务: {task_type} | 模型: {model_name}")
-    try:
-        current_client = get_client()
-        response = current_client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
-            stream=False,
-            temperature=temperature
-        )
-        return response.choices[0].message.content
-    except ValueError as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        error_msg = f"Error: {str(e)}"
-        print(f"LLM调用失败: {error_msg}")
-        return error_msg
+    print(f"[LLM Router] Prompt 长度: {len(prompt)} | System 长度: {len(system_prompt)}")
+
+    # 重试机制
+    max_retries = 3
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                print(f"[LLM Router] 第 {attempt + 1} 次重试...")
+                import time
+                time.sleep(retry_delay * attempt)  # 递增延迟
+
+            current_client = get_client()
+            response = current_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}],
+                stream=False,
+                temperature=temperature
+            )
+
+            # 检查响应有效性
+            if not response.choices:
+                return "Error: API 返回空响应"
+
+            result = response.choices[0].message.content
+            if not result:
+                return "Error: API 返回空内容"
+
+            print(f"[LLM Router] ✅ 成功，结果长度: {len(result)}")
+            return result
+
+        except ValueError as e:
+            error_type, retryable, detail = classify_error(e)
+            print(f"[LLM Router] ❌ {error_type}: {detail}")
+            return f"Error [{error_type}]: {str(e)}"
+
+        except Exception as e:
+            error_type, retryable, detail = classify_error(e)
+            print(f"[LLM Router] ❌ {error_type} (尝试 {attempt + 1}/{max_retries}): {detail}")
+
+            # 如果不可重试，直接返回
+            if not retryable:
+                print(f"[LLM Router] 此类错误不可重试，直接返回")
+                return f"Error [{error_type}]: {str(e)}"
+
+            # 如果是最后一次重试，返回错误
+            if attempt == max_retries - 1:
+                print(f"[LLM Router] 已达最大重试次数")
+                return f"Error [{error_type}]: {str(e)}"
+
+    return "Error: 未知失败"
 
 def stream_call_llm(prompt, system_prompt, task_type="writer"):
     """流式调用 LLM，返回生成器（同步生成器）"""
@@ -1036,12 +1144,14 @@ def stream_call_llm(prompt, system_prompt, task_type="writer"):
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
+        print("[LLM Router - Stream] 完成")
     except ValueError as e:
+        print(f"[LLM Router - Stream] ValueError: {str(e)}")
         yield f"Error: {str(e)}"
     except Exception as e:
-        error_msg = f"Error: {str(e)}"
-        print(f"LLM流式调用失败: {error_msg}")
-        yield error_msg
+        error_msg = str(e)
+        print(f"[LLM Router - Stream] Exception: {error_msg}")
+        yield f"Error: {error_msg}"
 
 async def async_stream_call_llm(prompt, system_prompt, task_type="writer"):
     """异步流式调用 LLM，返回异步生成器（适用于 NiceGUI）"""
@@ -1114,29 +1224,65 @@ def sync_review_chapter(content, context_str):
     task_type = "reviewer"
     model_name = CFG['models'].get(task_type, "deepseek-chat")
     temperature = CFG['temperatures'].get(task_type, 0.5)
-    sys_prompt = CFG['prompts'].get('reviewer_system', "你是一个严厉的编辑。")
+    sys_prompt = get_prompt('reviewer_system')
     prompt = f"【待审查正文】\n{content}\n【参考设定】\n{context_str}\n【任务】审查逻辑一致性、剧情节奏、文笔。输出Markdown报告。"
-    try:
-        current_client = get_client()
-        response = current_client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
-            stream=False,
-            temperature=temperature
-        )
-        return response.choices[0].message.content
-    except ValueError as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        return f"Error: {str(e)}"
+    print(f"\n[审稿] 模型: {model_name} | 温度: {temperature}")
+    print(f"[审稿] 正文长度: {len(content)} | 设定长度: {len(context_str)}")
+
+    max_retries = 3
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                print(f"[审稿] 第 {attempt + 1} 次重试...")
+                import time
+                time.sleep(retry_delay * attempt)
+
+            current_client = get_client()
+            response = current_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
+                stream=False,
+                temperature=temperature
+            )
+
+            if not response.choices:
+                return "Error [PARSE_ERROR]: API 返回空响应"
+            result = response.choices[0].message.content
+            if not result:
+                return "Error [PARSE_ERROR]: API 返回空内容"
+
+            print(f"[审稿] ✅ 成功，报告长度: {len(result)}")
+            return result
+
+        except ValueError as e:
+            error_type, retryable, detail = classify_error(e)
+            print(f"[审稿] ❌ {error_type}: {detail}")
+            return f"Error [{error_type}]: {str(e)}"
+
+        except Exception as e:
+            error_type, retryable, detail = classify_error(e)
+            print(f"[审稿] ❌ {error_type} (尝试 {attempt + 1}/{max_retries}): {detail}")
+
+            if not retryable:
+                print(f"[审稿] 此类错误不可重试")
+                return f"Error [{error_type}]: {str(e)}"
+
+            if attempt == max_retries - 1:
+                return f"Error [{error_type}]: {str(e)}"
+
+    return "Error: 未知失败"
 
 def stream_review_chapter(content, context_str):
     """流式调用审稿 LLM，返回生成器"""
     task_type = "reviewer"
     model_name = CFG['models'].get(task_type, "deepseek-chat")
     temperature = CFG['temperatures'].get(task_type, 0.5)
-    sys_prompt = CFG['prompts'].get('reviewer_system', "你是一个严厉的编辑。")
+    sys_prompt = get_prompt('reviewer_system')
     prompt = f"【待审查正文】\n{content}\n【参考设定】\n{context_str}\n【任务】审查逻辑一致性、剧情节奏、文笔。输出Markdown报告。"
+    print(f"\n[审稿-流式] 模型: {model_name} | 温度: {temperature}")
+    print(f"[审稿-流式] 正文长度: {len(content)} | 设定长度: {len(context_str)}")
     try:
         current_client = get_client()
         stream = current_client.chat.completions.create(
@@ -1148,53 +1294,90 @@ def stream_review_chapter(content, context_str):
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
+        print("[审稿-流式] 完成")
     except ValueError as e:
+        print(f"[审稿-流式] ValueError: {str(e)}")
         yield f"Error: {str(e)}"
     except Exception as e:
+        print(f"[审稿-流式] Exception: {str(e)}")
         yield f"Error: {str(e)}"
 
 def sync_analyze_time(content, prev_time_label):
     task_type = "timekeeper"
     model_name = CFG['models'].get(task_type, "deepseek-chat")
     temperature = CFG['temperatures'].get(task_type, 0.1)
-    sys_prompt = CFG['prompts'].get('timekeeper_system', "你是一个时间记录员。")
+    sys_prompt = get_prompt('timekeeper_system')
     prompt = f"【上一章时间】{prev_time_label}\n【本章正文】{content[:3000]}...\n【任务】1.分析时间流逝 2.推算当前时间 3.提取事件\n【输出格式】严格JSON: {{\"label\": \"...\", \"duration\": \"...\", \"events\": [\"...\"]}}"
-    try:
-        current_client = get_client()
-        response = current_client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
-            stream=False,
-            temperature=temperature
-        )
-        return response.choices[0].message.content
-    except ValueError as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        return f"Error: {str(e)}"
+    print(f"\n[时间分析] 模型: {model_name} | 温度: {temperature}")
+    print(f"[时间分析] 正文长度: {len(content)} | 上一章时间: {prev_time_label}")
 
-# 【修改】状态分析接口：增加提取“地点连接”的指令
+    max_retries = 3
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                print(f"[时间分析] 第 {attempt + 1} 次重试...")
+                import time
+                time.sleep(retry_delay * attempt)
+
+            current_client = get_client()
+            response = current_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
+                stream=False,
+                temperature=temperature
+            )
+
+            if not response.choices:
+                return "Error [PARSE_ERROR]: API 返回空响应"
+            result = response.choices[0].message.content
+            if not result:
+                return "Error [PARSE_ERROR]: API 返回空内容"
+
+            print(f"[时间分析] ✅ 成功，结果长度: {len(result)}")
+            return result
+
+        except ValueError as e:
+            error_type, retryable, detail = classify_error(e)
+            print(f"[时间分析] ❌ {error_type}: {detail}")
+            return f"Error [{error_type}]: {str(e)}"
+
+        except Exception as e:
+            error_type, retryable, detail = classify_error(e)
+            print(f"[时间分析] ❌ {error_type} (尝试 {attempt + 1}/{max_retries}): {detail}")
+
+            if not retryable:
+                print(f"[时间分析] 此类错误不可重试")
+                return f"Error [{error_type}]: {str(e)}"
+
+            if attempt == max_retries - 1:
+                return f"Error [{error_type}]: {str(e)}"
+
+    return "Error: 未知失败"
+
+# 【修改】状态分析接口：增加提取"地点连接"的指令
 def sync_analyze_state(content, current_data_summary):
     task_type = "auditor"
     model_name = CFG['models'].get(task_type, "deepseek-reasoner")
     temperature = CFG['temperatures'].get(task_type, 1.0)
-    sys_prompt = CFG['prompts'].get('auditor_system', "你是一个世界观管理员。")
-    
+    sys_prompt = get_prompt('auditor_system')
+
     prompt = f"""
     【当前正文】
     {content[:4000]}...
-    
+
     【现有数据库摘要】
     {current_data_summary}
-    
+
     【任务】
-    请分析正文，检测以下变化（请严格区分“更新”和“新增”）：
+    请分析正文，检测以下变化（请严格区分"更新"和"新增"）：
     1. **人物状态变更**：已有的人物等级、状态(受伤/死亡)、所属势力发生变化。
     2. **物品变更**：已有的物品发生持有者转移、状态变化。
     3. **新实体提取**：正文中首次出现的**重要**新人物、新物品（如法宝、神兵、特殊道具）或新地点。必须放入对应的 new_ 数组中！
     4. **人际关系变更**：提取新关系（如拜师、结仇）或关系变化。
     5. **地点连接**：主角从一个地点移动到了另一个地点，提取这种拓扑关系。
-    
+
     【输出格式】
     严格 JSON 格式，不要包含任何 Markdown 标记（如 ```json），字段如下：
     {{
@@ -1211,22 +1394,57 @@ def sync_analyze_state(content, current_data_summary):
         ]
     }}
     """
-    print(f"\n[LLM Router] 任务: State Auditor | 模型: {model_name}")
-    try:
-        current_client = get_client()
-        response = current_client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
-            stream=False,
-            temperature=temperature
-        )
-        return response.choices[0].message.content
-    except ValueError as e:
-        return f"Error: {str(e)}"
-    except Exception as e:
-        return f"Error: {str(e)}"
+    print(f"\n[状态审计] 模型: {model_name} | 温度: {temperature}")
+    print(f"[状态审计] 正文长度: {len(content)} | 数据库摘要长度: {len(current_data_summary)}")
 
-# 【修改】应用变更：增加处理“地点连接”的逻辑
+    max_retries = 3
+    retry_delay = 3  # reasoner 模型较慢，用更长延迟
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                print(f"[状态审计] 第 {attempt + 1} 次重试...")
+                import time
+                time.sleep(retry_delay * attempt)
+
+            current_client = get_client()
+            response = current_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
+                stream=False,
+                temperature=temperature
+            )
+
+            if not response.choices:
+                print("[状态审计] ❌ API 返回空响应")
+                return "Error [PARSE_ERROR]: API 返回空响应"
+            result = response.choices[0].message.content
+            if not result:
+                print("[状态审计] ❌ API 返回空内容")
+                return "Error [PARSE_ERROR]: API 返回空内容"
+
+            print(f"[状态审计] ✅ 成功，结果长度: {len(result)}")
+            return result
+
+        except ValueError as e:
+            error_type, retryable, detail = classify_error(e)
+            print(f"[状态审计] ❌ {error_type}: {detail}")
+            return f"Error [{error_type}]: {str(e)}"
+
+        except Exception as e:
+            error_type, retryable, detail = classify_error(e)
+            print(f"[状态审计] ❌ {error_type} (尝试 {attempt + 1}/{max_retries}): {detail}")
+
+            if not retryable:
+                print(f"[状态审计] 此类错误不可重试")
+                return f"Error [{error_type}]: {str(e)}"
+
+            if attempt == max_retries - 1:
+                return f"Error [{error_type}]: {str(e)}"
+
+    return "Error: 未知失败"
+
+# 【修改】应用变更：增加处理"地点连接"的逻辑
 def apply_state_changes(novel_manager, changes):
     logs = []
     

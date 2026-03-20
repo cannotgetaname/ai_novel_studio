@@ -206,7 +206,7 @@ def render_loc_graph():
     # 1. 预处理：建立快速索引
     loc_map = {l['name']: l for l in app_state.locations}
     
-    # 2. 算法：寻找每个地点的“老祖宗”和“层级深度”
+    # 2. 算法：寻找每个地点的"老祖宗"和"层级深度"
     def get_root_and_depth(loc_name):
         current = loc_map.get(loc_name)
         depth = 0
@@ -354,8 +354,8 @@ def open_connection_manager():
     # 2. 弹出整理对话框
     with ui.dialog() as dialog, ui.card().classes('w-1/2'):
         ui.label('🛠️ 连接关系整理').classes('text-h6')
-        ui.label(f'检测到 {len(issues)} 个单向连接。请勾选需要“自动补全反向连接”的项目。').classes('text-grey-7 text-sm')
-        ui.label('未勾选的项目将保留为“单向连接”（特殊情况）。').classes('text-red-400 text-xs italic')
+        ui.label(f'检测到 {len(issues)} 个单向连接。请勾选需要"自动补全反向连接"的项目。').classes('text-grey-7 text-sm')
+        ui.label('未勾选的项目将保留为"单向连接"（特殊情况）。').classes('text-red-400 text-xs italic')
         
         selected_issues = []
         with ui.scroll_area().classes('h-64 border p-2 bg-grey-1'):
@@ -478,7 +478,7 @@ def open_loc_dialog(index=None):
 
             # 2. 自动同步新增 (已移除)
             # 根据您的要求，这里不再自动添加反向连接。
-            # 如果需要双向，请使用主界面的“整理”工具进行批量修复。
+            # 如果需要双向，请使用主界面的"整理"工具进行批量修复。
 
             # ---------------------
 
@@ -521,93 +521,180 @@ async def delete_loc(index):
     refresh_loc_ui()
     ui.notify(f'已删除 "{deleted_name}"', type='positive')
 
-# --- 系统配置 UI ---
-def refresh_config_ui():
-    container = ui_refs.get('config_container')
+# --- API与模型配置 UI ---
+def refresh_api_ui():
+    """API与模型配置界面"""
+    container = ui_refs.get('api_container')
     if not container: return
-    
+
     container.clear()
-    
-    # 使用导入的 CFG 和 copy 库
+
     try:
         local_cfg = copy.deepcopy(CFG)
     except NameError:
         ui.notify("配置加载失败：CFG未导入", type='negative')
         return
-    
+
     with container:
         # 1. 基础配置
-        with ui.expansion('🔑 基础设置 (API & 路径)', icon='settings', value=True).classes('w-full bg-grey-1'):
-            with ui.column().classes('w-full p-2'):
+        with ui.card().classes('w-full p-4 mb-4 bg-blue-50'):
+            ui.label('🔑 API 设置').classes('text-lg font-bold text-blue-800 mb-2')
+            with ui.column().classes('w-full gap-2'):
                 ui.input('API Key', value=local_cfg.get('api_key', '')) \
                     .bind_value(local_cfg, 'api_key').classes('w-full').props('type=password')
                 ui.input('Base URL', value=local_cfg.get('base_url', '')) \
                     .bind_value(local_cfg, 'base_url').classes('w-full')
-                ui.input('Chunk Size (RAG切片大小)', value=str(local_cfg.get('chunk_size', 500))) \
+                ui.number('Chunk Size (RAG切片大小)', value=local_cfg.get('chunk_size', 500), min=100, max=2000) \
                     .bind_value(local_cfg, 'chunk_size').classes('w-full')
-        
+
         # 2. 模型路由配置
-        with ui.expansion('🤖 模型路由 (Models & Temp)', icon='smart_toy').classes('w-full bg-grey-1 mt-2'):
-            with ui.grid(columns=2).classes('w-full p-2 gap-4'):
+        with ui.card().classes('w-full p-4 mb-4 bg-green-50'):
+            ui.label('🤖 模型路由配置').classes('text-lg font-bold text-green-800 mb-2')
+            ui.label('为不同任务指定不同的模型和温度参数').classes('text-xs text-grey-6 mb-2')
+            with ui.grid(columns=2).classes('w-full gap-4'):
                 models = local_cfg.get('models', {})
                 temps = local_cfg.get('temperatures', {})
                 task_types = ['writer', 'architect', 'editor', 'reviewer', 'timekeeper', 'auditor']
-                
+
                 for task in task_types:
-                    with ui.card().classes('p-2'):
-                        ui.label(f'Task: {task.upper()}').classes('font-bold text-xs text-grey')
+                    with ui.card().classes('p-3 bg-white'):
+                        ui.label(f'Task: {task.upper()}').classes('font-bold text-xs text-grey mb-1')
                         ui.input('Model Name', value=models.get(task, '')) \
                             .on_value_change(lambda e, t=task: models.update({t: e.value})).classes('w-full dense')
                         ui.number('Temperature', value=temps.get(task, 0.7), min=0.0, max=2.0, step=0.1, format='%.1f') \
                             .on_value_change(lambda e, t=task: temps.update({t: e.value})).classes('w-full dense')
 
-        # 3. 提示词配置
-        with ui.expansion('📝 系统提示词 (System Prompts)', icon='description').classes('w-full bg-grey-1 mt-2'):
-            with ui.column().classes('w-full p-2'):
-                prompts = local_cfg.get('prompts', {})
-                prompt_keys = [
-                    ('writer_system', '写作助手'),
-                    ('architect_system', '架构师'),
-                    ('auditor_system', '状态审计'),
-                    ('reviewer_system', '审稿人'),
-                    ('timekeeper_system', '时间记录员'),
-                    ('knowledge_filter_system', '知识清洗'),
-                    ('summary_chapter_system', '章节摘要'),
-                    ('summary_book_system', '全书总结'),
-                    ('json_only_architect_system', 'JSON架构师'),
-                    ('inspiration_assistant_system', '灵感助手')
-                ]
-                
-                for key, label in prompt_keys:
-                    ui.label(f'{label} ({key})').classes('text-sm font-bold mt-2')
-                    ui.textarea(value=prompts.get(key, '')) \
-                        .on_value_change(lambda e, k=key: prompts.update({k: e.value})) \
-                        .classes('w-full').props('rows=3 input-style="font-size: 13px"')
-        # 4. 🛡️ 备份与安全 (新增)
-        with ui.expansion('🛡️ 备份与安全 (Backup & Security)', icon='security').classes('w-full bg-grey-1 mt-2'):
-            with ui.column().classes('w-full p-2'):
-                ui.label('自动备份设置 (全项目打包)').classes('text-sm font-bold')
-                # 默认 30 分钟
-                ui.number('自动备份间隔 (分钟)', value=local_cfg.get('backup_interval', 30), min=0, max=1440) \
-                    .bind_value(local_cfg, 'backup_interval').classes('w-full') \
-                    .tooltip('设置为 0 则关闭自动备份')
-                
-                ui.label('💡 提示：每次点击“保存”按钮时，系统会自动为当前章节创建“历史快照”。').classes('text-xs text-grey-600 mt-1')
-        
+        # 3. 备份与安全
+        with ui.card().classes('w-full p-4 mb-4 bg-orange-50'):
+            ui.label('🛡️ 备份与安全').classes('text-lg font-bold text-orange-800 mb-2')
+            ui.number('自动备份间隔 (分钟)', value=local_cfg.get('backup_interval', 30), min=0, max=1440) \
+                .bind_value(local_cfg, 'backup_interval').classes('w-full') \
+                .tooltip('设置为 0 则关闭自动备份')
+            ui.label('💡 提示：每次点击"保存"按钮时，系统会自动为当前章节创建"历史快照"。').classes('text-xs text-grey-600 mt-2')
+
         # 保存按钮
         async def save_config():
-            try:
-                local_cfg['chunk_size'] = int(local_cfg['chunk_size'])
-            except: pass
-            
-            # 这里需要 backend 模块
             res = await run.io_bound(backend.save_global_config, local_cfg)
             if "❌" in res:
                 ui.notify(res, type='negative')
             else:
                 ui.notify(res, type='positive')
-                
-        ui.button('💾 保存系统配置', on_click=save_config).props('color=primary icon=save').classes('w-full mt-4 h-12 text-lg')
+
+        ui.button('💾 保存配置', on_click=save_config).props('color=primary icon=save').classes('w-full h-12 text-lg')
+
+
+# --- 提示词管理 UI ---
+def refresh_prompts_ui():
+    """提示词管理界面 - 分类展示所有系统提示词"""
+    container = ui_refs.get('prompts_container')
+    if not container: return
+
+    container.clear()
+
+    try:
+        local_cfg = copy.deepcopy(CFG)
+    except NameError:
+        ui.notify("配置加载失败：CFG未导入", type='negative')
+        return
+
+    prompts = local_cfg.get('prompts', {})
+    default_prompts = backend.get_default_prompts()
+
+    # 提示词分类定义
+    prompt_categories = {
+        '写作类': [
+            ('writer_system', '✍️ 写作助手', '主写作模型使用的系统提示词，影响正文风格'),
+        ],
+        '分析类': [
+            ('reviewer_system', '📝 审稿人', '审稿模型使用的提示词，用于检查正文质量'),
+            ('auditor_system', '🔍 状态审计', '从正文中提取状态变更的提示词'),
+            ('timekeeper_system', '⏰ 时间记录员', '分析时间流逝的提示词'),
+        ],
+        '架构类': [
+            ('architect_system', '🏗️ 架构师', '规划后续章节的提示词'),
+            ('json_only_architect_system', '📋 JSON架构师', '简化版架构师，只输出JSON'),
+        ],
+        '辅助类': [
+            ('knowledge_filter_system', '🧹 知识清洗', '过滤RAG检索结果的提示词'),
+            ('summary_chapter_system', '📄 章节摘要', '生成章节摘要的提示词'),
+            ('summary_book_system', '📖 全书总结', '生成全书总纲的提示词'),
+            ('inspiration_assistant_system', '💡 灵感助手', '灵感百宝箱使用的提示词'),
+        ],
+    }
+
+    # 存储编辑器引用，用于重置功能
+    prompt_editors = {}
+
+    with container:
+        # 顶部工具栏
+        with ui.row().classes('w-full justify-between items-center mb-4'):
+            ui.label('📝 系统提示词管理').classes('text-lg font-bold')
+            ui.button('🔄 恢复所有默认提示词', on_click=lambda: confirm_reset_all(local_cfg, prompts, default_prompts, prompt_editors)) \
+                .props('outline color=orange size=sm icon=restore')
+
+        # 按分类展示提示词
+        for category, items in prompt_categories.items():
+            with ui.expansion(f'📂 {category}', icon='folder').classes('w-full mb-2 bg-grey-1'):
+                with ui.column().classes('w-full p-2 gap-4'):
+                    for key, label, desc in items:
+                        current_value = prompts.get(key, default_prompts.get(key, ''))
+                        is_modified = current_value != default_prompts.get(key, '')
+
+                        with ui.card().classes('w-full p-3 bg-white'):
+                            with ui.row().classes('w-full justify-between items-center mb-1'):
+                                ui.label(label).classes('text-base font-bold')
+                                with ui.row().classes('items-center gap-2'):
+                                    if is_modified:
+                                        ui.badge('已修改', color='orange').props('size=xs')
+                                    ui.button('重置', on_click=lambda k=key, cfg=local_cfg, p=prompts, d=default_prompts, eds=prompt_editors: reset_single_prompt(k, cfg, p, d, eds)) \
+                                        .props('flat size=xs color=grey icon=refresh')
+                            ui.label(f'Key: {key}').classes('text-xs text-grey-5 font-mono mb-1')
+                            ui.label(desc).classes('text-xs text-grey-6 mb-2')
+
+                            editor = ui.textarea(value=current_value) \
+                                .on_value_change(lambda e, k=key, p=prompts: p.update({k: e.value})) \
+                                .classes('w-full').props('rows=8 input-style="font-size: 13px; font-family: monospace"')
+                            prompt_editors[key] = editor
+
+        # 保存按钮
+        async def save_prompts():
+            res = await run.io_bound(backend.save_global_config, local_cfg)
+            if "❌" in res:
+                ui.notify(res, type='negative')
+            else:
+                ui.notify('✅ 提示词配置已保存', type='positive')
+                refresh_prompts_ui()
+
+        ui.button('💾 保存提示词配置', on_click=save_prompts).props('color=primary icon=save').classes('w-full h-12 text-lg mt-4')
+
+
+def reset_single_prompt(key, local_cfg, prompts, default_prompts, editors):
+    """重置单个提示词为默认值"""
+    if key in default_prompts:
+        prompts[key] = default_prompts[key]
+        if key in editors:
+            editors[key].value = default_prompts[key]
+        ui.notify(f'已重置 {key}', type='info')
+
+
+def confirm_reset_all(local_cfg, prompts, default_prompts, editors):
+    """确认恢复所有提示词为默认值"""
+    with ui.dialog() as dialog, ui.card().classes('w-96'):
+        ui.label('⚠️ 确认恢复所有默认提示词').classes('text-h6 text-orange')
+        ui.label('此操作将把所有提示词恢复为系统默认值，您当前的修改将丢失。').classes('text-sm text-grey-7 my-4')
+
+        def do_reset_all():
+            for key, value in default_prompts.items():
+                prompts[key] = value
+                if key in editors:
+                    editors[key].value = value
+            dialog.close()
+            ui.notify('✅ 所有提示词已恢复为默认值', type='positive')
+
+        with ui.row().classes('w-full justify-end mt-4'):
+            ui.button('取消', on_click=dialog.close).props('flat')
+            ui.button('确认恢复', on_click=do_reset_all).props('color=orange')
+    dialog.open()
 
 # ================= 全局查找替换工具 =================
 
@@ -755,7 +842,7 @@ def open_inspiration_dialog():
                     ui.button('⚡ 突发转折', on_click=lambda: do_gen('plot_twist')).props('color=orange icon=flash_on')
                     ui.button('💍 金手指设定', on_click=lambda: do_gen('gold_finger')).props('color=amber icon=stars')
                 
-                ui.label('提示：剧情生成会参考您当前的“世界观”设定。').classes('text-xs text-grey mt-2')
+                ui.label('提示：剧情生成会参考您当前的"世界观"设定。').classes('text-xs text-grey mt-2')
 
         with ui.row().classes('w-full justify-end mt-4'):
             ui.button('关闭', on_click=dialog.close).props('flat')
