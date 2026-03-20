@@ -2,7 +2,7 @@
 
 > 一款现代化的AI辅助写作IDE，融合**混合检索增强(RAG)**、**知识图谱**与**分形写作法**，助你从一个灵感到完成百万字长篇。
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
+![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
 ![NiceGUI](https://img.shields.io/badge/UI-NiceGUI-purple)
 ![AI](https://img.shields.io/badge/AI-Compatible-blue)
 ![ChromaDB](https://img.shields.io/badge/RAG-ChromaDB-green)
