@@ -7,10 +7,60 @@ from openai import OpenAI
 import shutil # <--- 新增
 import glob   # <--- 新增
 from datetime import datetime # <--- 必须加这一行！
+import re  # 用于字数统计的正则表达式
 
 import networkx as nx
 
 import hashlib
+
+
+def count_words(text):
+    """
+    精确统计字数，区分中英文
+    返回: {
+        'chinese': 中文字数,
+        'english': 英文单词数,
+        'total_chars': 总字符数,
+        'pure_chars': 纯文字符数(不含空格),
+        'total_words': 总字数(中文字+英文词)
+    }
+    """
+    if not text:
+        return {
+            'chinese': 0,
+            'english': 0,
+            'total_chars': 0,
+            'pure_chars': 0,
+            'total_words': 0
+        }
+
+    # 统计中文字符数
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+
+    # 统计英文单词数
+    english_words = len(re.findall(r'[a-zA-Z]+', text))
+
+    # 统计数字
+    numbers = len(re.findall(r'\d+', text))
+
+    # 总字符数（含空格、标点）
+    total_chars = len(text)
+
+    # 纯文字符数（不含空格）
+    pure_chars = len(re.sub(r'\s', '', text))
+
+    # 总字数 = 中文字 + 英文词 + 数字组
+    # 这是网文常用的统计方式
+    total_words = chinese_chars + english_words + numbers
+
+    return {
+        'chinese': chinese_chars,
+        'english': english_words,
+        'numbers': numbers,
+        'total_chars': total_chars,
+        'pure_chars': pure_chars,
+        'total_words': total_words
+    }
 
 class WorldGraph:
     def __init__(self, manager):
@@ -451,12 +501,91 @@ class NovelManager:
         if os.path.exists(path): os.remove(path)
 
     def get_total_word_count(self):
+        """获取全书总字数（使用精确字数统计）"""
         structure = self.load_structure()
         total = 0
         for chap in structure:
             content = self.load_chapter_content(chap['id'])
-            total += len(content)
+            total += count_words(content)['total_words']
         return total
+
+    def get_detailed_word_stats(self):
+        """
+        获取详细的字数统计信息
+        返回: {
+            'total_words': 全书总字数,
+            'chinese': 全书中文字数,
+            'english': 全书英文词数,
+            'chapter_count': 章节数,
+            'volume_count': 分卷数,
+            'avg_words': 平均章节字数,
+            'volumes': [分卷统计列表]
+        }
+        """
+        structure = self.load_structure()
+        volumes = self.load_volumes()
+
+        total_stats = {'total_words': 0, 'chinese': 0, 'english': 0, 'numbers': 0, 'total_chars': 0}
+        volume_stats = []
+
+        # 建立分卷ID到章节列表的映射
+        vol_chapters = {}
+        for chap in structure:
+            vol_id = chap.get('volume_id', 'vol_default')
+            if vol_id not in vol_chapters:
+                vol_chapters[vol_id] = []
+            vol_chapters[vol_id].append(chap)
+
+        # 统计每个分卷
+        for vol in volumes:
+            vol_id = vol['id']
+            vol_title = vol.get('title', '未命名分卷')
+            chapters = vol_chapters.get(vol_id, [])
+
+            vol_total = 0
+            vol_chinese = 0
+            vol_english = 0
+            chapter_details = []
+
+            for chap in chapters:
+                content = self.load_chapter_content(chap['id'])
+                stats = count_words(content)
+                vol_total += stats['total_words']
+                vol_chinese += stats['chinese']
+                vol_english += stats['english']
+                chapter_details.append({
+                    'id': chap['id'],
+                    'title': chap.get('title', '未命名'),
+                    'words': stats['total_words'],
+                    'chinese': stats['chinese']
+                })
+
+            volume_stats.append({
+                'id': vol_id,
+                'title': vol_title,
+                'words': vol_total,
+                'chinese': vol_chinese,
+                'english': vol_english,
+                'chapter_count': len(chapters),
+                'chapters': chapter_details
+            })
+
+            total_stats['total_words'] += vol_total
+            total_stats['chinese'] += vol_chinese
+            total_stats['english'] += vol_english
+
+        chapter_count = len(structure)
+        avg_words = total_stats['total_words'] // chapter_count if chapter_count > 0 else 0
+
+        return {
+            'total_words': total_stats['total_words'],
+            'chinese': total_stats['chinese'],
+            'english': total_stats['english'],
+            'chapter_count': chapter_count,
+            'volume_count': len(volumes),
+            'avg_words': avg_words,
+            'volumes': volume_stats
+        }
 
     def get_relevant_context(self, text_context):
         chars = self.load_characters()

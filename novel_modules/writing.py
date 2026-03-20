@@ -17,12 +17,15 @@ is_undo_redo_operation = False  # 【修复】撤销/重做操作标记：必须
 # ================= 辅助函数 =================
 
 def update_char_count():
+    """更新当前章节字数统计"""
     char_count_ref = ui_refs.get('char_count')
     content_ref = ui_refs.get('editor_content')
 
     if content_ref is not None and char_count_ref is not None:
         text = content_ref.value or ""
-        char_count_ref.set_text(f"当前章节字数: {len(text)}")
+        stats = backend.count_words(text)
+        # 显示格式: 总字数(中文字) / 总字符
+        char_count_ref.set_text(f"字数: {stats['total_words']:,} (汉字{stats['chinese']:,})")
 
 # 执行自动保存
 async def perform_auto_save():

@@ -92,16 +92,69 @@ try:
                 total = await run.io_bound(manager.get_total_word_count)
                 ui_refs['total_count'].set_text(f"全书字数: {total:,}")
 
+        async def show_detailed_stats():
+            """显示详细的字数统计信息"""
+            stats = await run.io_bound(manager.get_detailed_word_stats)
+
+            with ui.dialog() as dialog, ui.card().classes('w-[600px] max-h-[80vh]'):
+                ui.label('📊 作品统计信息').classes('text-h6 font-bold mb-2')
+
+                with ui.scroll_area().classes('w-full h-[60vh]'):
+                    # 总体统计
+                    with ui.card().classes('w-full bg-blue-50 mb-4'):
+                        ui.label('📈 总体概况').classes('text-subtitle1 font-bold text-blue-800')
+                        with ui.grid(columns=2).classes('w-full gap-2 p-2'):
+                            ui.label(f'总字数: {stats["total_words"]:,}').classes('font-bold')
+                            ui.label(f'中文字数: {stats["chinese"]:,}')
+                            ui.label(f'英文词数: {stats["english"]:,}')
+                            ui.label(f'平均章节: {stats["avg_words"]:,} 字')
+                            ui.label(f'章节总数: {stats["chapter_count"]} 章')
+                            ui.label(f'分卷数量: {stats["volume_count"]} 卷')
+
+                    # 分卷详情
+                    ui.label('📚 分卷详情').classes('text-subtitle1 font-bold mb-2')
+
+                    for vol in stats['volumes']:
+                        with ui.expansion(f"{vol['title']} - {vol['words']:,}字 ({vol['chapter_count']}章)") \
+                                .classes('w-full bg-white border mb-1'):
+                            with ui.column().classes('w-full p-2'):
+                                # 分卷统计概要
+                                with ui.row().classes('w-full gap-4 mb-2 text-sm text-grey-7'):
+                                    ui.label(f'中文: {vol["chinese"]:,}')
+                                    ui.label(f'英文: {vol["english"]:,}')
+
+                                # 章节列表
+                                ui.label('章节列表:').classes('text-xs text-grey-6 mt-2')
+                                with ui.column().classes('w-full gap-1'):
+                                    for chap in vol['chapters']:
+                                        with ui.row().classes('w-full justify-between text-xs'):
+                                            ui.label(f"第{chap['id']}章 {chap['title']}")
+                                            ui.label(f"{chap['words']:,}字").classes('text-grey-6')
+
+                ui.button('关闭', on_click=dialog.close).props('flat')
+
+            dialog.open()
+
         def refresh_sidebar():
             if not ui_refs['chapter_list']: return
             ui_refs['chapter_list'].clear()
+
+            # 预加载所有章节的字数统计
+            chapter_word_counts = {}
+            for chap in app_state.structure:
+                content = manager.load_chapter_content(chap['id'])
+                stats = backend.count_words(content)
+                chapter_word_counts[chap['id']] = stats['total_words']
 
             with ui_refs['chapter_list']:
                 for vol in app_state.volumes:
                     vol_chapters = [c for c in app_state.structure if c.get('volume_id') == vol['id']]
                     is_expanded = vol['id'] in app_state.expanded_volumes
 
-                    with ui.expansion(f"{vol['title']} ({len(vol_chapters)}章)", icon='book', value=is_expanded) \
+                    # 计算分卷总字数
+                    vol_words = sum(chapter_word_counts.get(c['id'], 0) for c in vol_chapters)
+
+                    with ui.expansion(f"{vol['title']} ({len(vol_chapters)}章 · {vol_words:,}字)", icon='book', value=is_expanded) \
                             .classes('w-full bg-blue-50 mb-1 border rounded shadow-sm') \
                             .on_value_change(lambda e, v=vol['id']: (app_state.expanded_volumes.add(v) if e.value else app_state.expanded_volumes.discard(v))) as expansion:
 
@@ -113,13 +166,17 @@ try:
                                 if chap.get('review_report'): status_icon += '📝'
                                 if chap.get('time_info', {}).get('events'): status_icon += '⏱️'
 
+                                word_count = chapter_word_counts.get(chap['id'], 0)
+
                                 async def on_chapter_click(i=real_idx):
                                     await writing.load_chapter(i)
 
-                                ui.button(f"{chap['id']}. {chap['title']} {status_icon}",
-                                          on_click=on_chapter_click) \
-                                    .props(f'flat color={color} align=left no-caps dense size=sm') \
-                                    .classes('w-full text-left pl-4 hover:bg-grey-100')
+                                with ui.row().classes('w-full items-center gap-1 pl-2'):
+                                    ui.button(f"{chap['id']}. {chap['title']} {status_icon}",
+                                              on_click=on_chapter_click) \
+                                        .props(f'flat color={color} align=left no-caps dense size=sm') \
+                                        .classes('flex-grow text-left hover:bg-grey-100')
+                                    ui.label(f"{word_count:,}字").classes('text-xs text-grey-5 mr-2')
 
                             with ui.row().classes('w-full justify-end pr-2 pt-1 border-t border-dashed'):
                                 ui.button(icon='edit', on_click=lambda v=vol['id']: writing.rename_volume(v)) \
@@ -158,8 +215,9 @@ try:
             with ui.card().classes('w-full q-mb-sm bg-white p-2'):
                 ui_refs['total_count'] = ui.label('全书字数: ---').classes('text-sm font-bold')
                 with ui.row().classes('w-full'):
-                    ui.button('🔄 刷新', on_click=lambda: refresh_total_word_count()).props('flat size=sm color=primary').classes('w-1/2')
-                    ui.button('📤 导出', on_click=lambda: writing.export_novel()).props('flat size=sm color=grey').classes('w-1/2')
+                    ui.button('🔄 刷新', on_click=lambda: refresh_total_word_count()).props('flat size=sm color=primary').classes('w-1/3')
+                    ui.button('📊 详情', on_click=lambda: show_detailed_stats()).props('flat size=sm color=indigo').classes('w-1/3')
+                    ui.button('📤 导出', on_click=lambda: writing.export_novel()).props('flat size=sm color=grey').classes('w-1/3')
 
                 with ui.row().classes('w-full q-mt-sm'):
                     async def show_book_summary():
