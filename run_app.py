@@ -163,7 +163,7 @@ try:
                                 real_idx = app_state.structure.index(chap)
                                 color = 'purple' if real_idx == app_state.current_chapter_idx else 'grey-8'
                                 status_icon = ''
-                                if chap.get('review_report'): status_icon += '📝'
+                                if chap.get('review_data', {}).get('issues'): status_icon += '📝'
                                 if chap.get('time_info', {}).get('events'): status_icon += '⏱️'
 
                                 word_count = chapter_word_counts.get(chap['id'], 0)
@@ -194,7 +194,7 @@ try:
         # --- 4.1 Header (固定顶部) ---
         with ui.header().classes('bg-white text-black shadow-sm shrink-0'):
             ui.button(on_click=lambda: drawer.toggle(), icon='menu').props('flat color=black')
-            ui.label('AI 网文工作站 (V15.2 配置管理版)').classes('text-h6')
+            ui.label('AI 网文工作站').classes('text-h6')
 
         # --- 4.2 Left Drawer (左侧边栏) ---
         with ui.left_drawer(value=True).classes('bg-blue-50 flex flex-col') as drawer:

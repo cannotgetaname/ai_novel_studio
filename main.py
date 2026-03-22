@@ -116,7 +116,7 @@ async def main_page():
                             real_idx = app_state.structure.index(chap)
                             color = 'purple' if real_idx == app_state.current_chapter_idx else 'grey-8'
                             status_icon = ''
-                            if chap.get('review_report'): status_icon += '📝'
+                            if chap.get('review_data', {}).get('issues'): status_icon += '📝'
                             if chap.get('time_info', {}).get('events'): status_icon += '⏱️'
 
                             word_count = chapter_word_counts.get(chap['id'], 0)

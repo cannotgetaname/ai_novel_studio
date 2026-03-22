@@ -485,20 +485,252 @@ class NovelManager:
         except: return []
 
     def save_structure(self, data):
+        # 清理不应保存到 structure.json 的字段
+        cleaned_data = []
+        for chap in data:
+            # 创建副本，避免修改原数据
+            chap_copy = chap.copy()
+            # 移除不应该保存的字段
+            chap_copy.pop('paragraphs', None)  # paragraphs 应保存在单独文件
+            chap_copy.pop('content', None)  # content 应保存在单独文件
+            cleaned_data.append(chap_copy)
+
         with open(self.structure_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+            json.dump(cleaned_data, f, ensure_ascii=False, indent=4)
     
     def save_chapter_content(self, chapter_id, content):
         with open(os.path.join(self.chapters_dir, f"{chapter_id}.txt"), 'w', encoding='utf-8') as f:
             f.write(content)
-    
+
     def load_chapter_content(self, chapter_id):
         path = os.path.join(self.chapters_dir, f"{chapter_id}.txt")
         return open(path, 'r', encoding='utf-8').read() if os.path.exists(path) else ""
-    
-    def delete_chapter(self, chapter_id):
-        path = os.path.join(self.chapters_dir, f"{chapter_id}.txt")
-        if os.path.exists(path): os.remove(path)
+
+    # ================= 段落级别存储（新增） =================
+
+    def text_to_paragraphs(self, text):
+        """
+        将纯文本转换为段落结构
+        返回: [{"id": "p1", "text": "...", "word_count": 100}, ...]
+        """
+        if not text or not text.strip():
+            return []
+
+        paragraphs = []
+        # 按换行符分割，保留非空段落
+        lines = text.split('\n')
+        para_id = 1
+        current_para = []
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped:
+                current_para.append(line)  # 保留原始缩进
+            else:
+                # 空行表示段落结束
+                if current_para:
+                    para_text = '\n'.join(current_para)
+                    paragraphs.append({
+                        "id": f"p{para_id}",
+                        "text": para_text,
+                        "word_count": count_words(para_text)['total_words']
+                    })
+                    para_id += 1
+                    current_para = []
+
+        # 处理最后一个段落
+        if current_para:
+            para_text = '\n'.join(current_para)
+            paragraphs.append({
+                "id": f"p{para_id}",
+                "text": para_text,
+                "word_count": count_words(para_text)['total_words']
+            })
+
+        return paragraphs
+
+    def paragraphs_to_text(self, paragraphs):
+        """将段落结构转换回纯文本"""
+        if not paragraphs:
+            return ""
+        return '\n\n'.join(p['text'] for p in paragraphs)
+
+    def save_chapter_paragraphs(self, chapter_id, paragraphs):
+        """保存章节段落结构到JSON文件"""
+        data = {
+            "chapter_id": chapter_id,
+            "paragraphs": paragraphs,
+            "metadata": {
+                "paragraph_count": len(paragraphs),
+                "total_words": sum(p.get('word_count', 0) for p in paragraphs),
+                "updated_at": datetime.now().isoformat()
+            }
+        }
+        path = os.path.join(self.chapters_dir, f"{chapter_id}_paragraphs.json")
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        # 同时保存纯文本版本（兼容）
+        text = self.paragraphs_to_text(paragraphs)
+        self.save_chapter_content(chapter_id, text)
+
+    def load_chapter_paragraphs(self, chapter_id):
+        """
+        加载章节段落结构
+        如果JSON不存在，自动从txt转换（兼容旧数据）
+        """
+        json_path = os.path.join(self.chapters_dir, f"{chapter_id}_paragraphs.json")
+
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                return data.get('paragraphs', [])
+            except (json.JSONDecodeError, KeyError):
+                pass  # 文件损坏，重新从txt转换
+
+        # 从txt文件转换（兼容旧数据）
+        text = self.load_chapter_content(chapter_id)
+        if text:
+            paragraphs = self.text_to_paragraphs(text)
+            # 自动保存转换结果
+            if paragraphs:
+                self.save_chapter_paragraphs(chapter_id, paragraphs)
+            return paragraphs
+
+        return []
+
+    def update_single_paragraph(self, chapter_id, paragraph_id, new_text):
+        """
+        更新单个段落内容
+        返回更新后的段落列表
+        """
+        paragraphs = self.load_chapter_paragraphs(chapter_id)
+
+        for i, p in enumerate(paragraphs):
+            if p['id'] == paragraph_id:
+                paragraphs[i]['text'] = new_text
+                paragraphs[i]['word_count'] = count_words(new_text)['total_words']
+                break
+
+        self.save_chapter_paragraphs(chapter_id, paragraphs)
+        return paragraphs
+
+    def get_paragraph_by_id(self, chapter_id, paragraph_id):
+        """根据ID获取单个段落"""
+        paragraphs = self.load_chapter_paragraphs(chapter_id)
+        for p in paragraphs:
+            if p['id'] == paragraph_id:
+                return p
+        return None
+
+    def add_paragraph(self, chapter_id, after_id, text):
+        """在指定段落后插入新段落"""
+        paragraphs = self.load_chapter_paragraphs(chapter_id)
+        new_id = f"p{len(paragraphs) + 1}"
+        new_para = {
+            "id": new_id,
+            "text": text,
+            "word_count": count_words(text)['total_words']
+        }
+
+        # 找到插入位置
+        insert_idx = len(paragraphs)
+        for i, p in enumerate(paragraphs):
+            if p['id'] == after_id:
+                insert_idx = i + 1
+                break
+
+        paragraphs.insert(insert_idx, new_para)
+        # 重新编号（可选，保持ID连续）
+        for i, p in enumerate(paragraphs, 1):
+            p['id'] = f"p{i}"
+
+        self.save_chapter_paragraphs(chapter_id, paragraphs)
+        return paragraphs
+
+    def delete_paragraph(self, chapter_id, paragraph_id):
+        """删除指定段落"""
+        paragraphs = self.load_chapter_paragraphs(chapter_id)
+        paragraphs = [p for p in paragraphs if p['id'] != paragraph_id]
+
+        # 重新编号
+        for i, p in enumerate(paragraphs, 1):
+            p['id'] = f"p{i}"
+
+        self.save_chapter_paragraphs(chapter_id, paragraphs)
+        return paragraphs
+
+    def split_paragraph(self, chapter_id, paragraph_id, split_position):
+        """
+        在指定位置分割段落
+        split_position: 段落内的字符位置
+        """
+        paragraphs = self.load_chapter_paragraphs(chapter_id)
+
+        for i, p in enumerate(paragraphs):
+            if p['id'] == paragraph_id:
+                text = p['text']
+                if 0 < split_position < len(text):
+                    # 分割
+                    first_half = text[:split_position].strip()
+                    second_half = text[split_position:].strip()
+
+                    # 替换原段落
+                    paragraphs[i]['text'] = first_half
+                    paragraphs[i]['word_count'] = count_words(first_half)['total_words']
+
+                    # 插入新段落
+                    new_para = {
+                        "id": f"p_temp",
+                        "text": second_half,
+                        "word_count": count_words(second_half)['total_words']
+                    }
+                    paragraphs.insert(i + 1, new_para)
+                break
+
+        # 重新编号
+        for i, p in enumerate(paragraphs, 1):
+            p['id'] = f"p{i}"
+
+        self.save_chapter_paragraphs(chapter_id, paragraphs)
+        return paragraphs
+
+    def merge_paragraphs(self, chapter_id, paragraph_ids):
+        """合并多个段落"""
+        paragraphs = self.load_chapter_paragraphs(chapter_id)
+
+        # 找到要合并的段落
+        to_merge = []
+        merge_indices = []
+        for i, p in enumerate(paragraphs):
+            if p['id'] in paragraph_ids:
+                to_merge.append(p['text'])
+                merge_indices.append(i)
+
+        if len(to_merge) < 2:
+            return paragraphs
+
+        # 合并文本
+        merged_text = '\n\n'.join(to_merge)
+        merged_para = {
+            "id": "p_temp",
+            "text": merged_text,
+            "word_count": count_words(merged_text)['total_words']
+        }
+
+        # 替换第一个段落，删除其余
+        paragraphs[merge_indices[0]] = merged_para
+        # 从后往前删除，避免索引变化
+        for idx in sorted(merge_indices[1:], reverse=True):
+            paragraphs.pop(idx)
+
+        # 重新编号
+        for i, p in enumerate(paragraphs, 1):
+            p['id'] = f"p{i}"
+
+        self.save_chapter_paragraphs(chapter_id, paragraphs)
+        return paragraphs
 
     def get_total_word_count(self):
         """获取全书总字数（使用精确字数统计）"""
@@ -1667,3 +1899,1082 @@ def export_full_novel(novel_manager):
         content = novel_manager.load_chapter_content(chap['id'])
         full_text.extend([title, "-" * 20, content, "\n\n"])
     return "\n".join(full_text)
+
+
+# ================= 分段审稿与重绘功能 =================
+
+def split_content_into_sections(content, min_section_length=500):
+    """
+    将正文按段落分割成多个部分，用于分段审稿
+    返回: [(section_id, section_text, start_pos, end_pos), ...]
+    """
+    if not content:
+        return []
+
+    # 按换行符分割段落
+    paragraphs = content.split('\n')
+    sections = []
+    current_section = []
+    current_start = 0
+    section_id = 1
+    char_pos = 0
+
+    for para in paragraphs:
+        para_len = len(para) + 1  # +1 for newline
+        current_section.append(para)
+
+        # 当累积够一定长度，或者段落明显是一个场景结束
+        joined = '\n'.join(current_section)
+        if len(joined) >= min_section_length or (para.strip() and para.strip()[-1] in '。！？"」』）'):
+            if len(joined) >= 200:  # 至少 200 字才算一个 section
+                sections.append({
+                    'id': section_id,
+                    'text': joined,
+                    'start': current_start,
+                    'end': char_pos + para_len - 1,
+                    'word_count': count_words(joined)['total_words']
+                })
+                section_id += 1
+                current_section = []
+                current_start = char_pos + para_len
+
+        char_pos += para_len
+
+    # 处理剩余内容
+    if current_section:
+        joined = '\n'.join(current_section)
+        sections.append({
+            'id': section_id,
+            'text': joined,
+            'start': current_start,
+            'end': len(content),
+            'word_count': count_words(joined)['total_words']
+        })
+
+    return sections
+
+
+def sync_review_section(section_text, section_id, context_str):
+    """
+    审稿单个段落/部分
+    返回该部分的审稿意见（JSON格式）
+    """
+    task_type = "reviewer"
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 0.5)
+    sys_prompt = get_prompt('reviewer_system')
+
+    prompt = f"""【任务】审查以下段落（第{section_id}部分），输出JSON格式的审稿意见。
+
+【待审查段落】
+{section_text}
+
+【参考设定】
+{context_str}
+
+【输出要求】
+请严格按以下JSON格式输出（不要使用Markdown代码块）：
+{{
+    "overall_score": 1-10分,
+    "issues": [
+        {{
+            "type": "人设/逻辑/节奏/文笔/其他",
+            "severity": "严重/中等/轻微",
+            "location": "问题描述位置（引用原文）",
+            "description": "具体问题描述",
+            "suggestion": "修改建议"
+        }}
+    ],
+    "highlights": ["亮点1", "亮点2"],
+    "summary": "一句话总结这段的问题"
+}}
+"""
+
+    print(f"[分段审稿] 第{section_id}部分 | 长度: {len(section_text)}")
+
+    max_retries = 3
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                import time
+                time.sleep(retry_delay * attempt)
+
+            current_client = get_client()
+            response = current_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
+                stream=False,
+                temperature=temperature
+            )
+
+            if not response.choices:
+                return {"error": "API返回空响应"}
+
+            result = response.choices[0].message.content
+            if not result:
+                return {"error": "API返回空内容"}
+
+            # 解析 JSON
+            import re
+            clean = result.replace("```json", "").replace("```", "").strip()
+            start, end = clean.find('{'), clean.rfind('}')
+            if start >= 0 and end > start:
+                return json.loads(clean[start:end+1])
+            return {"error": "无法解析JSON", "raw": result}
+
+        except json.JSONDecodeError as e:
+            print(f"[分段审稿] JSON解析失败: {e}")
+            return {"error": f"JSON解析失败: {e}", "raw": result}
+        except Exception as e:
+            print(f"[分段审稿] 异常 (尝试 {attempt+1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                return {"error": str(e)}
+
+    return {"error": "未知失败"}
+
+
+def sync_review_full_chapter_with_sections(content, context_str):
+    """
+    分段审稿整章，返回完整的审稿报告
+    包含：整体评价 + 各部分详细意见
+    """
+    print(f"\n[分段审稿] 开始 | 正文长度: {len(content)}")
+
+    # 1. 分割内容
+    sections = split_content_into_sections(content)
+    print(f"[分段审稿] 共分割为 {len(sections)} 个部分")
+
+    if not sections:
+        return {"error": "内容太短，无法分段审稿"}
+
+    # 2. 审稿每个部分
+    section_reviews = []
+    total_score = 0
+    all_issues = []
+
+    for sec in sections:
+        review = sync_review_section(sec['text'], sec['id'], context_str)
+        section_reviews.append({
+            'id': sec['id'],
+            'text_preview': sec['text'][:100] + '...' if len(sec['text']) > 100 else sec['text'],
+            'word_count': sec['word_count'],
+            'start': sec['start'],
+            'end': sec['end'],
+            'review': review
+        })
+
+        if 'overall_score' in review:
+            total_score += review['overall_score']
+        if 'issues' in review:
+            for issue in review['issues']:
+                issue['section_id'] = sec['id']
+                all_issues.append(issue)
+
+    # 3. 生成整体评价
+    avg_score = total_score / len(sections) if sections else 0
+
+    # 按严重程度分类问题
+    severe_issues = [i for i in all_issues if i.get('severity') == '严重']
+    medium_issues = [i for i in all_issues if i.get('severity') == '中等']
+    minor_issues = [i for i in all_issues if i.get('severity') == '轻微']
+
+    # 生成 Markdown 报告
+    report = f"""# 📋 章节审稿报告
+
+## 📊 整体评价
+
+| 指标 | 数值 |
+|------|------|
+| 综合评分 | {avg_score:.1f}/10 |
+| 段落数 | {len(sections)} |
+| 严重问题 | {len(severe_issues)} 个 |
+| 中等问题 | {len(medium_issues)} 个 |
+| 轻微问题 | {len(minor_issues)} 个 |
+
+---
+
+## 📝 分段详细意见
+
+"""
+    for sr in section_reviews:
+        review = sr['review']
+        score = review.get('overall_score', '?')
+        summary = review.get('summary', '无总结')
+        issues_count = len(review.get('issues', []))
+
+        report += f"""### 第 {sr['id']} 部分 ({sr['word_count']}字)
+
+**评分**: {score}/10 | **问题数**: {issues_count}
+
+> 预览：{sr['text_preview']}
+
+**总结**: {summary}
+
+"""
+        if review.get('issues'):
+            report += "**问题列表**:\n"
+            for idx, issue in enumerate(review['issues'], 1):
+                report += f"{idx}. [{issue.get('type', '未知')}] {issue.get('description', '')}\n"
+                report += f"   - 位置: _{issue.get('location', '未指定')}_\n"
+                report += f"   - 建议: {issue.get('suggestion', '无')}\n"
+            report += "\n"
+
+        if review.get('highlights'):
+            report += f"**亮点**: {', '.join(review['highlights'])}\n\n"
+
+        report += "---\n\n"
+
+    # 汇总严重问题
+    if severe_issues:
+        report += "## ⚠️ 严重问题汇总\n\n"
+        for i, issue in enumerate(severe_issues, 1):
+            report += f"{i}. **第{issue.get('section_id', '?')}部分**: {issue.get('description', '')}\n"
+            report += f"   - 建议: {issue.get('suggestion', '无')}\n\n"
+
+    print(f"[分段审稿] 完成 | 平均分: {avg_score:.1f} | 问题数: {len(all_issues)}")
+
+    return {
+        'avg_score': avg_score,
+        'section_count': len(sections),
+        'total_issues': len(all_issues),
+        'severe_issues': len(severe_issues),
+        'section_reviews': section_reviews,
+        'markdown_report': report
+    }
+
+
+def sync_rewrite_section(section_text, instruction, context_str):
+    """
+    重写单个段落
+    返回重写后的文本
+    """
+    task_type = "writer"
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 1.3)
+
+    sys_prompt = get_prompt('writer_system')
+
+    prompt = f"""【任务】根据修改要求重写以下段落。
+
+【原段落】
+{section_text}
+
+【修改要求】
+{instruction}
+
+【参考设定】
+{context_str}
+
+【输出要求】
+1. 只输出重写后的段落内容，不要包含任何解释或说明
+2. 保持字数相近，除非修改要求明确要求扩展或缩减
+3. 保持文风一致
+4. 确保重写后的内容与修改要求高度相关
+"""
+
+    print(f"[段落重绘] 长度: {len(section_text)} | 要求: {instruction[:50]}...")
+
+    max_retries = 3
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                import time
+                time.sleep(retry_delay * attempt)
+
+            current_client = get_client()
+            response = current_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
+                stream=False,
+                temperature=temperature
+            )
+
+            if not response.choices:
+                return None, "API返回空响应"
+
+            result = response.choices[0].message.content
+            if not result:
+                return None, "API返回空内容"
+
+            print(f"[段落重绘] 完成 | 结果长度: {len(result)}")
+            return result.strip(), None
+
+        except Exception as e:
+            print(f"[段落重绘] 异常 (尝试 {attempt+1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                return None, str(e)
+
+    return None, "未知失败"
+
+
+# ================= 基于段落结构的审稿与重绘 =================
+
+def _clean_control_chars_in_json(json_str):
+    """
+    清理JSON字符串中的无效控制字符
+    这些字符可能是AI在生成时意外引入的（如字符串内部的换行符）
+    """
+    import re
+    # 在JSON字符串值内部，将未转义的控制字符转义
+    # 这是一个简化处理：替换所有未转义的控制字符
+    result = []
+    in_string = False
+    escape_next = False
+
+    for char in json_str:
+        if escape_next:
+            result.append(char)
+            escape_next = False
+            continue
+
+        if char == '\\' and in_string:
+            result.append(char)
+            escape_next = True
+            continue
+
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            result.append(char)
+            continue
+
+        if in_string:
+            # 在字符串内部，控制字符需要转义
+            if ord(char) < 32:
+                if char == '\n':
+                    result.append('\\n')
+                elif char == '\r':
+                    result.append('\\r')
+                elif char == '\t':
+                    result.append('\\t')
+                else:
+                    result.append(f'\\u{ord(char):04x}')
+            else:
+                result.append(char)
+        else:
+            result.append(char)
+
+    return ''.join(result)
+
+
+def _parse_json_aggressive(json_str):
+    """
+    激进的JSON解析，用于处理AI返回的不规范JSON
+    """
+    import re
+
+    # 尝试提取关键字段
+    result = {
+        "overall_score": 5,
+        "overall_comment": "",
+        "issues": []
+    }
+
+    try:
+        # 尝试提取评分
+        score_match = re.search(r'"overall_score"\s*:\s*(\d+)', json_str)
+        if score_match:
+            result["overall_score"] = int(score_match.group(1))
+
+        # 尝试提取总体评价
+        comment_match = re.search(r'"overall_comment"\s*:\s*"([^"]*)"', json_str)
+        if comment_match:
+            result["overall_comment"] = comment_match.group(1)
+
+        # 尝试提取问题列表（简化处理）
+        issues_pattern = r'"issues"\s*:\s*\[(.*?)\](?=\s*\})'
+        issues_match = re.search(issues_pattern, json_str, re.DOTALL)
+        if issues_match:
+            issues_text = issues_match.group(1)
+            # 简化：提取每个问题对象
+            issue_objects = re.findall(r'\{[^{}]*\}', issues_text)
+            for i, obj in enumerate(issue_objects):
+                issue = {
+                    "id": f"issue_{i+1}",
+                    "paragraph_id": "p1",
+                    "quote": "",
+                    "type": "其他",
+                    "severity": "轻微",
+                    "description": "",
+                    "suggestion": ""
+                }
+
+                # 提取各个字段
+                for field in ['paragraph_id', 'quote', 'type', 'severity', 'description', 'suggestion']:
+                    match = re.search(f'"{field}"\\s*:\\s*"([^"]*)"', obj)
+                    if match:
+                        issue[field] = match.group(1)
+
+                if issue.get('description'):
+                    result['issues'].append(issue)
+
+    except Exception as e:
+        print(f"[激进JSON解析] 失败: {e}")
+
+    return result
+
+def sync_review_chapter_by_paragraphs(paragraphs, context_str):
+    """
+    基于段落结构的章节审稿
+    整体审稿，问题关联到段落ID
+
+    Args:
+        paragraphs: [{"id": "p1", "text": "...", "word_count": 100}, ...]
+        context_str: 世界观、人物等背景信息
+
+    Returns:
+        {
+            "overall_score": 7,
+            "overall_comment": "整体评价...",
+            "issues": [
+                {
+                    "id": "issue_1",
+                    "paragraph_id": "p3",
+                    "quote": "原文引用...",
+                    "type": "人设",
+                    "severity": "严重",
+                    "description": "问题描述",
+                    "suggestion": "修改建议"
+                },
+                ...
+            ]
+        }
+    """
+    task_type = "reviewer"
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 0.5)
+    sys_prompt = get_prompt('reviewer_system')
+
+    # 构建带段落标记的正文
+    numbered_content = ""
+    for p in paragraphs:
+        numbered_content += f"【段落{p['id']}】({p['word_count']}字)\n{p['text']}\n\n"
+
+    prompt = f"""【任务】审查以下章节，输出JSON格式的审稿意见。问题必须关联到具体段落ID。
+
+【待审章节】
+{numbered_content}
+
+【参考设定】
+{context_str}
+
+【输出要求】
+请严格按以下JSON格式输出（不要使用Markdown代码块）：
+{{
+    "overall_score": 1-10分,
+    "overall_comment": "对整章的总体评价",
+    "issues": [
+        {{
+            "id": "issue_1",
+            "paragraph_id": "段落ID（如p1, p2等）",
+            "quote": "问题所在位置的原文引用（用于定位）",
+            "type": "人设/逻辑/节奏/文笔/其他",
+            "severity": "严重/中等/轻微",
+            "description": "具体问题描述",
+            "suggestion": "修改建议"
+        }}
+    ]
+}}
+
+注意：
+1. 每个问题必须准确标注段落ID（p1, p2, p3...）
+2. quote字段必须是从原文中精确引用的短语或句子
+3. 只报告真正需要修改的问题，不要吹毛求疵
+"""
+
+    print(f"\n[段落审稿] 段落数: {len(paragraphs)} | 总字数: {sum(p['word_count'] for p in paragraphs)}")
+
+    max_retries = 3
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                import time
+                time.sleep(retry_delay * attempt)
+
+            current_client = get_client()
+            response = current_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
+                stream=False,
+                temperature=temperature
+            )
+
+            if not response.choices:
+                return {"error": "API返回空响应"}
+
+            result = response.choices[0].message.content
+            if not result:
+                return {"error": "API返回空内容"}
+
+            # 解析 JSON
+            clean = result.replace("```json", "").replace("```", "").strip()
+            start, end = clean.find('{'), clean.rfind('}')
+            if start >= 0 and end > start:
+                json_str = clean[start:end+1]
+
+                # 清理无效控制字符
+                json_str = _clean_control_chars_in_json(json_str)
+
+                try:
+                    parsed = json.loads(json_str)
+                except json.JSONDecodeError as parse_err:
+                    print(f"[段落审稿] 标准解析失败: {parse_err}，尝试激进解析")
+                    parsed = _parse_json_aggressive(json_str)
+
+                # 验证并修正段落ID
+                valid_ids = {p['id'] for p in paragraphs}
+                if 'issues' in parsed:
+                    for issue in parsed['issues']:
+                        pid = issue.get('paragraph_id', '')
+                        # 如果段落ID无效，尝试通过quote匹配
+                        if pid not in valid_ids:
+                            matched_id = find_paragraph_by_quote(paragraphs, issue.get('quote', ''))
+                            if matched_id:
+                                issue['paragraph_id'] = matched_id
+                            else:
+                                issue['paragraph_id'] = paragraphs[0]['id'] if paragraphs else 'p1'
+
+                print(f"[段落审稿] 完成 | 评分: {parsed.get('overall_score', '?')} | 问题数: {len(parsed.get('issues', []))}")
+                return parsed
+
+            return {"error": "无法解析JSON", "raw": result}
+
+        except json.JSONDecodeError as e:
+            print(f"[段落审稿] JSON解析失败: {e}")
+            return {"error": f"JSON解析失败: {e}", "raw": result}
+        except Exception as e:
+            print(f"[段落审稿] 异常 (尝试 {attempt+1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                return {"error": str(e)}
+
+    return {"error": "未知失败"}
+
+
+def find_paragraph_by_quote(paragraphs, quote):
+    """
+    通过原文引用找到对应的段落ID
+    """
+    if not quote:
+        return None
+
+    quote = quote.strip()
+    if len(quote) < 5:  # 太短不可靠
+        return None
+
+    for p in paragraphs:
+        if quote in p['text']:
+            return p['id']
+
+    return None
+
+
+def sync_rewrite_paragraph(paragraph_text, issues, context_str):
+    """
+    根据审稿问题重写单个段落
+
+    Args:
+        paragraph_text: 原段落文本
+        issues: 该段落的问题列表
+        context_str: 背景信息
+
+    Returns:
+        (new_text, error) 元组
+    """
+    task_type = "writer"
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 1.0)
+
+    # 计算字数
+    original_word_count = count_words(paragraph_text)['total_words']
+    original_char_count = len(paragraph_text)
+
+    # 字数限制：最多3倍，但不超过800字
+    max_chars = min(original_char_count * 3, 800)
+    # 计算合理的目标字数范围
+    target_min = original_char_count
+    target_max = max_chars
+
+    # 整理问题（包含更完整的信息）
+    issues_text = ""
+    for i, issue in enumerate(issues, 1):
+        issues_text += f"{i}. [{issue.get('severity', '未知')}] {issue.get('description', '')}\n"
+        quote = issue.get('quote', '')
+        if quote:
+            issues_text += f"   原文片段: \"{quote[:50]}...\"\n"
+        suggestion = issue.get('suggestion', '')
+        if suggestion:
+            issues_text += f"   修改建议: {suggestion[:100]}\n"
+
+    prompt = f"""【任务】根据审稿意见修改以下段落。
+
+【原段落】（{original_char_count}字）
+{paragraph_text}
+
+【背景信息】
+{context_str[:500] if context_str else '无'}
+
+【需要修复的问题】
+{issues_text}
+
+【严格要求】
+1. 只输出修改后的段落正文，不要有任何解释或开头结尾
+2. 针对上述问题进行修改，可适当增删内容
+3. 【字数硬限制】输出长度必须在{target_min}-{target_max}字之间，不得超过{max_chars}字
+4. 保持原有文风和叙事风格
+"""
+
+    print(f"[段落重写] 原长度: {original_char_count}字 | 上限: {max_chars}字")
+
+    max_retries = 3
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                import time
+                time.sleep(retry_delay * attempt)
+
+            current_client = get_client()
+            response = current_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                stream=False,
+                temperature=temperature,
+                max_tokens=max_chars * 2  # 硬性限制输出token数（中文约1.5-2 token/字）
+            )
+
+            if not response.choices:
+                return None, "API返回空响应"
+
+            result = response.choices[0].message.content
+            if not result:
+                return None, "API返回空内容"
+
+            result = result.strip()
+
+            # 检查字数是否严重超标（超过800字的1.5倍才截断）
+            if len(result) > 1200:
+                print(f"[段落重写] ⚠️ 结果过长 ({len(result)}字)，截取前{max_chars}字")
+                # 按段落分割
+                paragraphs = result.split('\n\n')
+                if len(paragraphs[0]) <= max_chars:
+                    result = paragraphs[0].strip()
+                else:
+                    # 在句号处截断
+                    result = result[:max_chars]
+                    last_period = result.rfind('。')
+                    if last_period > max_chars // 2:
+                        result = result[:last_period + 1]
+
+            print(f"[段落重写] 完成 | 新长度: {len(result)}字")
+            return result, None
+
+        except Exception as e:
+            print(f"[段落重写] 异常 (尝试 {attempt+1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                return None, str(e)
+
+    return None, "未知失败"
+
+
+def apply_paragraph_rewrite(novel_manager, chapter_id, paragraph_id, new_text):
+    """
+    应用段落重写结果（安全更新单个段落）
+
+    Returns:
+        更新后的段落列表
+    """
+    return novel_manager.update_single_paragraph(chapter_id, paragraph_id, new_text)
+
+
+# ================= 分维度审稿功能 =================
+
+def sync_review_character_consistency(paragraphs, characters_info):
+    """
+    人设一致性检查维度
+    检查人物行为、语言、性格是否符合设定
+
+    Args:
+        paragraphs: 段落列表
+        characters_info: 人物设定信息字符串
+
+    Returns:
+        {"score": 8, "issues": [...]}
+    """
+    task_type = "reviewer"
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 0.3)  # 更低温度，更严格
+
+    # 构建带段落标记的正文
+    numbered_content = ""
+    for p in paragraphs:
+        numbered_content += f"【段落{p['id']}】\n{p['text']}\n\n"
+
+    prompt = f"""【任务】作为人设审核专家，检查以下章节中人物行为是否符合其性格设定。
+
+【人物设定】
+{characters_info}
+
+【待审章节】
+{numbered_content}
+
+【检查要点】
+1. 人物言行是否符合其性格特点？
+2. 人物能力表现是否合理（不要超出或低于其能力范围）？
+3. 人物之间的关系互动是否符合设定？
+4. 是否有OOC（Out of Character）行为？
+
+【输出要求】
+严格按JSON格式输出（不要用Markdown代码块）：
+{{
+    "score": 1-10分,
+    "issues": [
+        {{
+            "paragraph_id": "段落ID",
+            "character": "人物名",
+            "quote": "问题原文引用",
+            "problem": "违反了什么设定",
+            "severity": "严重/中等/轻微",
+            "suggestion": "修改建议"
+        }}
+    ]
+}}
+
+注意：只报告真正的人设问题，不要过度解读。如果没有问题，issues可以为空数组。
+"""
+
+    print(f"\n[人设检查] 开始检查...")
+
+    try:
+        current_client = get_client()
+        response = current_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            temperature=temperature
+        )
+
+        result = response.choices[0].message.content if response.choices else ""
+
+        # 解析JSON
+        clean = result.replace("```json", "").replace("```", "").strip()
+        start, end = clean.find('{'), clean.rfind('}')
+        if start >= 0 and end > start:
+            json_str = _clean_control_chars_in_json(clean[start:end+1])
+            try:
+                parsed = json.loads(json_str)
+            except:
+                parsed = _parse_json_aggressive(json_str)
+
+            # 标准化issue格式
+            issues = []
+            for i, issue in enumerate(parsed.get('issues', [])):
+                issues.append({
+                    "id": f"char_{i+1}",
+                    "paragraph_id": issue.get('paragraph_id', 'p1'),
+                    "dimension": "人设",
+                    "type": "人设不一致",
+                    "severity": issue.get('severity', '轻微'),
+                    "quote": issue.get('quote', ''),
+                    "description": f"[{issue.get('character', '人物')}] {issue.get('problem', '')}",
+                    "suggestion": issue.get('suggestion', '')
+                })
+
+            print(f"[人设检查] 完成 | 评分: {parsed.get('score', '?')} | 问题数: {len(issues)}")
+            return {"score": parsed.get('score', 5), "issues": issues}
+
+    except Exception as e:
+        print(f"[人设检查] 异常: {e}")
+
+    return {"score": 5, "issues": []}
+
+
+def sync_review_plot_logic(paragraphs, world_setting, chapter_outline):
+    """
+    剧情逻辑检查维度
+    检查情节发展是否合理、有无逻辑漏洞
+
+    Args:
+        paragraphs: 段落列表
+        world_setting: 世界观设定
+        chapter_outline: 本章大纲
+
+    Returns:
+        {"score": 8, "issues": [...]}
+    """
+    task_type = "reviewer"
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 0.3)
+
+    numbered_content = ""
+    for p in paragraphs:
+        numbered_content += f"【段落{p['id']}】\n{p['text']}\n\n"
+
+    prompt = f"""【任务】作为剧情逻辑审核专家，检查以下章节是否存在逻辑漏洞。
+
+【世界观设定】
+{world_setting}
+
+【本章大纲】
+{chapter_outline}
+
+【待审章节】
+{numbered_content}
+
+【检查要点】
+1. 事件因果关系是否合理？
+2. 时间线是否清晰、有无矛盾？
+3. 人物行为动机是否充分？
+4. 是否有"机械降神"或不合理的巧合？
+5. 伏笔埋设是否自然？
+6. 冲突解决是否合理？
+
+【输出要求】
+严格按JSON格式输出（不要用Markdown代码块）：
+{{
+    "score": 1-10分,
+    "issues": [
+        {{
+            "paragraph_id": "段落ID",
+            "quote": "问题原文引用",
+            "problem": "逻辑问题描述",
+            "severity": "严重/中等/轻微",
+            "suggestion": "修改建议"
+        }}
+    ]
+}}
+"""
+
+    print(f"\n[逻辑检查] 开始检查...")
+
+    try:
+        current_client = get_client()
+        response = current_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            temperature=temperature
+        )
+
+        result = response.choices[0].message.content if response.choices else ""
+
+        clean = result.replace("```json", "").replace("```", "").strip()
+        start, end = clean.find('{'), clean.rfind('}')
+        if start >= 0 and end > start:
+            json_str = _clean_control_chars_in_json(clean[start:end+1])
+            try:
+                parsed = json.loads(json_str)
+            except:
+                parsed = _parse_json_aggressive(json_str)
+
+            issues = []
+            for i, issue in enumerate(parsed.get('issues', [])):
+                issues.append({
+                    "id": f"logic_{i+1}",
+                    "paragraph_id": issue.get('paragraph_id', 'p1'),
+                    "dimension": "逻辑",
+                    "type": "剧情逻辑",
+                    "severity": issue.get('severity', '轻微'),
+                    "quote": issue.get('quote', ''),
+                    "description": issue.get('problem', ''),
+                    "suggestion": issue.get('suggestion', '')
+                })
+
+            print(f"[逻辑检查] 完成 | 评分: {parsed.get('score', '?')} | 问题数: {len(issues)}")
+            return {"score": parsed.get('score', 5), "issues": issues}
+
+    except Exception as e:
+        print(f"[逻辑检查] 异常: {e}")
+
+    return {"score": 5, "issues": []}
+
+
+def sync_review_pacing(paragraphs):
+    """
+    节奏把控检查维度
+    检查叙事节奏、信息密度、读者体验
+
+    Args:
+        paragraphs: 段落列表
+
+    Returns:
+        {"score": 8, "issues": [...]}
+    """
+    task_type = "reviewer"
+    model_name = CFG['models'].get(task_type, "deepseek-chat")
+    temperature = CFG['temperatures'].get(task_type, 0.3)
+
+    numbered_content = ""
+    for p in paragraphs:
+        numbered_content += f"【段落{p['id']}】({p['word_count']}字)\n{p['text']}\n\n"
+
+    total_words = sum(p['word_count'] for p in paragraphs)
+
+    prompt = f"""【任务】作为叙事节奏审核专家，检查以下章节的节奏把控是否得当。
+
+【待审章节】（共{len(paragraphs)}个段落，{total_words}字）
+{numbered_content}
+
+【检查要点】
+1. 开头是否能在3个段落内抓住读者注意力？
+2. 节奏张弛是否得当？是否有冗长的无意义描写？
+3. 对话与叙述的比例是否合理？
+4. 情绪高潮是否铺垫到位？
+5. 结尾是否有钩子或悬念？
+6. 信息密度是否适中（不要过于密集或过于稀疏）？
+7. 场景转换是否自然？
+
+【输出要求】
+严格按JSON格式输出（不要用Markdown代码块）：
+{{
+    "score": 1-10分,
+    "issues": [
+        {{
+            "paragraph_id": "段落ID",
+            "quote": "问题原文引用（如适用）",
+            "problem": "节奏问题描述",
+            "severity": "严重/中等/轻微",
+            "suggestion": "修改建议"
+        }}
+    ]
+}}
+"""
+
+    print(f"\n[节奏检查] 开始检查...")
+
+    try:
+        current_client = get_client()
+        response = current_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            temperature=temperature
+        )
+
+        result = response.choices[0].message.content if response.choices else ""
+
+        clean = result.replace("```json", "").replace("```", "").strip()
+        start, end = clean.find('{'), clean.rfind('}')
+        if start >= 0 and end > start:
+            json_str = _clean_control_chars_in_json(clean[start:end+1])
+            try:
+                parsed = json.loads(json_str)
+            except:
+                parsed = _parse_json_aggressive(json_str)
+
+            issues = []
+            for i, issue in enumerate(parsed.get('issues', [])):
+                issues.append({
+                    "id": f"pacing_{i+1}",
+                    "paragraph_id": issue.get('paragraph_id', 'p1'),
+                    "dimension": "节奏",
+                    "type": "节奏把控",
+                    "severity": issue.get('severity', '轻微'),
+                    "quote": issue.get('quote', ''),
+                    "description": issue.get('problem', ''),
+                    "suggestion": issue.get('suggestion', '')
+                })
+
+            print(f"[节奏检查] 完成 | 评分: {parsed.get('score', '?')} | 问题数: {len(issues)}")
+            return {"score": parsed.get('score', 5), "issues": issues}
+
+    except Exception as e:
+        print(f"[节奏检查] 异常: {e}")
+
+    return {"score": 5, "issues": []}
+
+
+def sync_review_chapter_multi_dimension(paragraphs, context_info):
+    """
+    多维度综合审稿
+    分别进行人设、逻辑、节奏检查，然后汇总
+
+    Args:
+        paragraphs: 段落列表
+        context_info: {
+            "characters": "人物设定字符串",
+            "world_setting": "世界观设定",
+            "chapter_outline": "本章大纲"
+        }
+
+    Returns:
+        {
+            "overall_score": 7,
+            "dimension_scores": {"人设": 8, "逻辑": 7, "节奏": 6},
+            "issues": [...],
+            "summary": "整体评价"
+        }
+    """
+    print(f"\n{'='*50}")
+    print(f"[多维度审稿] 开始 | 段落数: {len(paragraphs)}")
+    print(f"{'='*50}")
+
+    all_issues = []
+    dimension_results = {}
+
+    # 1. 人设一致性检查
+    characters_info = context_info.get('characters', '')
+    if characters_info:
+        char_result = sync_review_character_consistency(paragraphs, characters_info)
+        dimension_results['人设'] = char_result
+        all_issues.extend(char_result['issues'])
+    else:
+        dimension_results['人设'] = {"score": 0, "issues": [], "skipped": True}
+
+    # 2. 剧情逻辑检查
+    world_setting = context_info.get('world_setting', '')
+    chapter_outline = context_info.get('chapter_outline', '')
+    if world_setting or chapter_outline:
+        logic_result = sync_review_plot_logic(paragraphs, world_setting, chapter_outline)
+        dimension_results['逻辑'] = logic_result
+        all_issues.extend(logic_result['issues'])
+    else:
+        dimension_results['逻辑'] = {"score": 0, "issues": [], "skipped": True}
+
+    # 3. 节奏把控检查
+    pacing_result = sync_review_pacing(paragraphs)
+    dimension_results['节奏'] = pacing_result
+    all_issues.extend(pacing_result['issues'])
+
+    # 计算总体评分
+    scores = [r['score'] for r in dimension_results.values() if r.get('score', 0) > 0]
+    overall_score = sum(scores) / len(scores) if scores else 5
+
+    # 按严重程度统计
+    severe_count = len([i for i in all_issues if i.get('severity') == '严重'])
+    medium_count = len([i for i in all_issues if i.get('severity') == '中等'])
+    minor_count = len([i for i in all_issues if i.get('severity') == '轻微'])
+
+    # 验证段落ID
+    valid_ids = {p['id'] for p in paragraphs}
+    for issue in all_issues:
+        if issue.get('paragraph_id') not in valid_ids:
+            # 尝试通过quote匹配
+            matched = find_paragraph_by_quote(paragraphs, issue.get('quote', ''))
+            issue['paragraph_id'] = matched if matched else 'p1'
+
+    result = {
+        "overall_score": round(overall_score, 1),
+        "dimension_scores": {
+            name: result['score'] for name, result in dimension_results.items()
+        },
+        "issues": all_issues,
+        "statistics": {
+            "total_issues": len(all_issues),
+            "severe": severe_count,
+            "medium": medium_count,
+            "minor": minor_count
+        }
+    }
+
+    print(f"\n[多维度审稿] 完成！")
+    print(f"  总分: {result['overall_score']}/10")
+    print(f"  各维度: {result['dimension_scores']}")
+    print(f"  问题数: {len(all_issues)} (严重:{severe_count} 中等:{medium_count} 轻微:{minor_count})")
+
+    return result

@@ -47,8 +47,9 @@ async def perform_auto_save():
     chapter['title'] = title
     chapter['outline'] = outline
 
-    # 写入磁盘
-    await run.io_bound(manager.save_chapter_content, chapter['id'], content)
+    # 写入磁盘（同时更新段落结构）
+    paragraphs = manager.text_to_paragraphs(content)
+    await run.io_bound(manager.save_chapter_paragraphs, chapter['id'], paragraphs)
     await run.io_bound(manager.save_structure, app_state.structure)
 
     save_status_ref = ui_refs.get('save_status')
@@ -483,11 +484,46 @@ async def load_chapter(index):
         if 'review_panel' in ui_refs and ui_refs['review_panel'] is not None:
             panel_ref = ui_refs['review_panel']
             panel_ref.clear()
-            report = chapter.get('review_report', '')
+            review_data = chapter.get('review_data', {})
+
             with ui_refs['review_panel']:
-                if report: ui.markdown(report).classes('w-full text-sm p-2')
-                else: ui.label("暂无审稿记录").classes('text-grey italic p-2')
-            # 【修复】添加对right_tabs和tab_rev存在的检查
+                if review_data and review_data.get('issues'):
+                    overall = review_data.get('overall_score', 0)
+                    dim_scores = review_data.get('dimension_scores', {})
+                    stats = review_data.get('statistics', {})
+
+                    ui.label(f"📊 综合评分: {overall}/10").classes('text-lg font-bold mb-2')
+
+                    # 如果已修复，显示修复信息
+                    if review_data.get('fixed_at'):
+                        ui.label(f"✅ 已于 {review_data['fixed_at'][:10]} 修复 {review_data.get('fixed_count', 0)} 个问题").classes('text-xs text-green-600 mb-2')
+
+                    # 各维度评分
+                    if dim_scores:
+                        with ui.row().classes('gap-2 mb-2'):
+                            for dim, score in dim_scores.items():
+                                if score > 0:
+                                    color = 'green' if score >= 8 else ('orange' if score >= 6 else 'red')
+                                    ui.badge(f"{dim}:{score}", color=color).props('rounded')
+
+                    # 问题统计
+                    if stats:
+                        ui.label(f"问题: 严重{stats.get('severe', 0)} 中等{stats.get('medium', 0)} 轻微{stats.get('minor', 0)}").classes('text-xs text-grey-6')
+
+                    # 主要问题列表（折叠）
+                    issues = review_data.get('issues', [])
+                    if issues:
+                        with ui.expansion(f"查看全部 {len(issues)} 个问题", icon='list').classes('w-full mt-2'):
+                            for issue in issues[:10]:
+                                severity = issue.get('severity', '轻微')
+                                color = {'严重': 'red', '中等': 'orange', '轻微': 'grey'}.get(severity, 'grey')
+                                with ui.row().classes('items-start gap-1 mb-1'):
+                                    ui.badge(severity, color=color).props('dense size=xs')
+                                    ui.label(f"[段{issue.get('paragraph_id', '?')}] {issue.get('description', '')[:30]}...").classes('text-xs')
+                else:
+                    ui.label("暂无审稿记录，点击「审稿」按钮开始").classes('text-grey italic p-2')
+
+            # 切换到审稿意见tab
             tabs_ref = ui_refs.get('right_tabs')
             tab_rev_ref = ui_refs.get('tab_rev')
             if tabs_ref is not None and tab_rev_ref is not None:
@@ -546,8 +582,10 @@ async def save_current_chapter():
     print(f"[完整保存] 大纲长度: {len(chapter['outline'])}")
     print(f"[完整保存] 正文长度: {len(new_content)}")
 
-    await run.io_bound(manager.save_chapter_content, chapter['id'], new_content)
-    print("[完整保存] 章节内容已写入磁盘")
+    # 保存内容（同时更新段落结构）
+    paragraphs = manager.text_to_paragraphs(new_content)
+    await run.io_bound(manager.save_chapter_paragraphs, chapter['id'], paragraphs)
+    print("[完整保存] 章节内容和段落结构已写入磁盘")
 
     # 【新增】创建历史快照
     await run.io_bound(manager.create_chapter_snapshot, chapter['id'], new_content)
@@ -876,72 +914,448 @@ async def open_rewrite_dialog():
     dialog.open()
 
 async def open_review_dialog():
+    """多维度审稿 - 人设、逻辑、节奏分别检查，然后汇总"""
     content_ref = ui_refs.get('editor_content')
     content = content_ref.value if content_ref is not None else ""
-    if not content or len(content) < 50: ui.notify('正文太短', type='warning'); return
-    ui.notify('主编正在审稿...', spinner=True)
-    ctx = f"【世界观】{app_state.settings['world_view']}\n"
-    for c in app_state.characters: ctx += f"- {c['name']}: {c['status']}, {c['role']}\n"
+    if not content or len(content) < 100:
+        ui.notify('正文太短，至少需要100字', type='warning')
+        return
 
-    # 流式输出审稿报告
-    report = ""
-    has_error = False
+    # 获取当前章节
+    chapter = app_state.get_current_chapter()
+    chapter_id = chapter['id'] if chapter else 1
+    chapter_outline = chapter.get('outline', '') if chapter else ''
 
-    import queue
-    import threading
+    # 准备上下文信息
+    characters_info = ""
+    for c in app_state.characters:
+        characters_info += f"- {c['name']}({c['role']}/{c['status']}): {c['bio']}\n"
+        if c.get('relations'):
+            rel_strs = [f"{r['type']}->{r['target']}" for r in c['relations']]
+            characters_info += f"  关系: {', '.join(rel_strs)}\n"
 
-    text_queue = queue.Queue()
-    stream_done = object()
+    world_setting = app_state.settings.get('world_view', '')
 
-    def run_stream():
+    context_info = {
+        "characters": characters_info,
+        "world_setting": world_setting,
+        "chapter_outline": chapter_outline
+    }
+
+    with ui.dialog() as dialog, ui.card().classes('w-[900px] max-h-[90vh]'):
+        ui.label('📋 多维度审稿').classes('text-h6 mb-2')
+
+        # 进度显示
+        status_label = ui.label('正在加载段落结构...').classes('text-sm text-grey-6 mb-2')
+
+        # 维度评分显示区域
+        dimension_row = ui.row().classes('w-full gap-4 mb-4')
+
+        # 结果显示区域
+        with ui.scroll_area().classes('w-full h-[50vh]'):
+            result_container = ui.column().classes('w-full')
+
+        ui.button('关闭', on_click=dialog.close).props('flat')
+
+    dialog.open()
+
+    # 异步执行审稿
+    async def do_review():
         try:
-            for chunk in backend.stream_review_chapter(content, ctx):
-                text_queue.put(chunk)
+            # 1. 转换为段落结构
+            paragraphs = await run.io_bound(manager.load_chapter_paragraphs, chapter_id)
+
+            if not paragraphs:
+                paragraphs = manager.text_to_paragraphs(content)
+                if paragraphs:
+                    await run.io_bound(manager.save_chapter_paragraphs, chapter_id, paragraphs)
+
+            if not paragraphs:
+                status_label.set_text('无法解析内容')
+                return
+
+            status_label.set_text(f'共 {len(paragraphs)} 个段落，开始多维度审稿...')
+
+            # 2. 执行多维度审稿
+            result = await run.io_bound(
+                backend.sync_review_chapter_multi_dimension,
+                paragraphs,
+                context_info
+            )
+
+            # 3. 显示维度评分
+            dimension_row.clear()
+            with dimension_row:
+                dimension_scores = result.get('dimension_scores', {})
+                for dim, score in dimension_scores.items():
+                    color = 'green' if score >= 8 else ('orange' if score >= 6 else 'red')
+                    with ui.card().classes(f'flex-1 bg-{color}-50 p-2 text-center'):
+                        ui.label(dim).classes('font-bold')
+                        ui.label(f'{score}/10').classes(f'text-2xl text-{color}-600')
+
+            # 4. 显示结果
+            result_container.clear()
+            with result_container:
+                # 总体统计
+                stats = result.get('statistics', {})
+                overall = result.get('overall_score', 0)
+
+                with ui.card().classes('w-full bg-blue-50 mb-4 p-3'):
+                    with ui.row().classes('items-center gap-4'):
+                        ui.label(f'📊 综合评分: {overall}/10').classes('text-xl font-bold')
+                        ui.label(f'|').classes('text-grey-4')
+                        ui.label(f'严重: {stats.get("severe", 0)}').classes('text-red-600')
+                        ui.label(f'中等: {stats.get("medium", 0)}').classes('text-orange-600')
+                        ui.label(f'轻微: {stats.get("minor", 0)}').classes('text-grey-600')
+
+                # 按维度分组显示问题
+                issues_by_dimension = {}
+                for issue in result.get('issues', []):
+                    dim = issue.get('dimension', '其他')
+                    if dim not in issues_by_dimension:
+                        issues_by_dimension[dim] = []
+                    issues_by_dimension[dim].append(issue)
+
+                for dim in ['人设', '逻辑', '节奏']:
+                    dim_issues = issues_by_dimension.get(dim, [])
+                    if not dim_issues:
+                        continue
+
+                    with ui.expansion(f"🔍 {dim}问题 ({len(dim_issues)}个)", icon='warning') \
+                            .classes('w-full mb-2'):
+                        with ui.column().classes('w-full gap-2'):
+
+                            for issue in dim_issues:
+                                severity = issue.get('severity', '轻微')
+                                color = {'严重': 'red', '中等': 'orange', '轻微': 'grey'}.get(severity, 'grey')
+                                pid = issue.get('paragraph_id', '?')
+
+                                with ui.card().classes('w-full bg-white p-2'):
+                                    with ui.row().classes('items-center gap-2 mb-1'):
+                                        ui.badge(severity, color=color).props('dense')
+                                        ui.label(f'段落{pid}').classes('text-xs font-bold')
+
+                                    ui.label(issue.get('description', '')).classes('text-sm')
+
+                                    if issue.get('quote'):
+                                        with ui.row().classes('items-center gap-1 mt-1'):
+                                            ui.label('原文:').classes('text-xs text-grey-5')
+                                            ui.label(f'"{issue.get("quote")[:50]}..."').classes('text-xs italic text-grey-6')
+
+                                    ui.label(f'建议: {issue.get("suggestion", "")}').classes('text-xs text-blue-600 mt-1')
+
+            # 5. 保存审稿结果
+            review_data = {
+                'overall_score': result.get('overall_score', 0),
+                'dimension_scores': result.get('dimension_scores', {}),
+                'issues': result.get('issues', []),
+                'statistics': result.get('statistics', {}),
+                'paragraph_count': len(paragraphs),
+                'reviewed_at': datetime.now().isoformat()
+            }
+
+            chapter['review_data'] = review_data
+            await run.io_bound(manager.save_structure, app_state.structure)
+
+            status_label.set_text(f'审稿完成！总分: {overall}/10 | 共 {len(result.get("issues", []))} 个问题')
+
+            # 更新右侧面板
+            review_panel_ref = ui_refs.get('review_panel')
+            if review_panel_ref:
+                review_panel_ref.clear()
+                with review_panel_ref:
+                    ui.label(f"📊 总分: {overall}/10").classes('text-lg font-bold mb-2')
+
+                    # 各维度评分
+                    dim_scores = result.get('dimension_scores', {})
+                    if dim_scores:
+                        with ui.row().classes('gap-2 mb-2'):
+                            for dim, score in dim_scores.items():
+                                if score > 0:
+                                    color = 'green' if score >= 8 else ('orange' if score >= 6 else 'red')
+                                    ui.badge(f"{dim}:{score}", color=color).props('rounded')
+
+                    # 问题统计
+                    stats = result.get('statistics', {})
+                    if stats:
+                        ui.label(f"问题: 严重{stats.get('severe', 0)} 中等{stats.get('medium', 0)} 轻微{stats.get('minor', 0)}").classes('text-xs text-grey-6')
+
+                    # 问题列表
+                    issues = result.get('issues', [])
+                    if issues:
+                        with ui.expansion(f"查看 {len(issues)} 个问题", icon='list').classes('w-full mt-2'):
+                            for issue in issues[:10]:
+                                severity = issue.get('severity', '轻微')
+                                color = {'严重': 'red', '中等': 'orange', '轻微': 'grey'}.get(severity, 'grey')
+                                with ui.row().classes('items-start gap-1 mb-1'):
+                                    ui.badge(severity, color=color).props('dense size=xs')
+                                    ui.label(f"[段{issue.get('paragraph_id', '?')}] {issue.get('description', '')[:30]}...").classes('text-xs')
+
+            ui.notify('审稿完成', type='positive')
+
         except Exception as e:
-            text_queue.put(f"Error: {str(e)}")
-        finally:
-            text_queue.put(stream_done)
+            import traceback
+            traceback.print_exc()
+            status_label.set_text(f'审稿失败: {str(e)}')
+            ui.notify(f'审稿失败: {str(e)}', type='negative')
 
-    thread = threading.Thread(target=run_stream, daemon=True)
-    thread.start()
+    await do_review()
 
-    # 先准备一个对话框用于实时显示
-    with ui.dialog() as d, ui.card().classes('w-2/3 h-3/4'):
-        ui.label('📋 审稿报告').classes('text-h6')
-        with ui.scroll_area().classes('w-full flex-grow') as scroll_area:
-            report_display = ui.markdown("").classes('w-full text-sm p-2')
-    d.open()
+async def open_section_rewrite_dialog():
+    """
+    基于段落结构的重绘 - 精确定位，安全修改
+    用户选择问题，系统只修改对应段落
+    """
+    current_chapter = app_state.get_current_chapter()
+    if not current_chapter:
+        ui.notify('请先选择章节', type='warning')
+        return
 
-    # 消费队列并更新UI
-    while thread.is_alive() or not text_queue.empty():
+    chapter_id = current_chapter['id']
+
+    # 检查是否有审稿结果
+    review_data = current_chapter.get('review_data', {})
+    issues = review_data.get('issues', [])
+
+    # 加载段落结构
+    paragraphs = await run.io_bound(manager.load_chapter_paragraphs, chapter_id)
+
+    if not paragraphs:
+        # 从编辑器内容创建段落
+        content_ref = ui_refs.get('editor_content')
+        content = content_ref.value if content_ref is not None else ""
+        if content:
+            paragraphs = manager.text_to_paragraphs(content)
+            await run.io_bound(manager.save_chapter_paragraphs, chapter_id, paragraphs)
+
+    if not paragraphs:
+        ui.notify('无法解析内容', type='warning')
+        return
+
+    if not issues:
+        ui.notify('请先进行审稿，获取修改建议', type='warning')
+        return
+
+    # 准备上下文
+    ctx = f"【世界观】{app_state.settings.get('world_view', '')}\n"
+    for c in app_state.characters:
+        ctx += f"- {c['name']}: {c['status']}, {c['role']}\n"
+
+    # 按段落分组问题
+    issues_by_para = {}
+    for issue in issues:
+        pid = issue.get('paragraph_id', 'p1')
+        if pid not in issues_by_para:
+            issues_by_para[pid] = []
+        issues_by_para[pid].append(issue)
+
+    # 用户选择的问题
+    selected_issues = set()  # issue.id 的集合
+    checkbox_refs = {}  # 保存checkbox引用，用于全选时更新UI
+
+    with ui.dialog() as dialog, ui.card().classes('w-[900px] max-h-[90vh]'):
+        ui.label('✨ 选择要修复的问题').classes('text-h6 mb-2')
+        ui.label('勾选需要修复的问题，系统将只修改对应段落').classes('text-sm text-grey-6 mb-2')
+
+        with ui.scroll_area().classes('w-full h-[50vh] border p-2 bg-grey-1'):
+            # 按段落显示问题
+            for p in paragraphs:
+                pid = p['id']
+                para_issues = issues_by_para.get(pid, [])
+
+                if not para_issues:
+                    continue  # 没有问题的段落不显示
+
+                with ui.card().classes('w-full mb-2 bg-white'):
+                    ui.label(f"📝 段落{pid} ({p['word_count']}字)").classes('font-bold text-blue-800')
+                    preview = p['text'][:100] + '...' if len(p['text']) > 100 else p['text']
+                    ui.label(preview).classes('text-xs text-grey-6 italic ml-4')
+
+                    ui.separator().classes('my-1')
+
+                    # 显示该段落的问题
+                    for issue in para_issues:
+                        issue_id = issue.get('id', f"{pid}_{len(para_issues)}")
+                        severity = issue.get('severity', '未知')
+                        color = {'严重': 'red', '中等': 'orange', '轻微': 'grey'}.get(severity, 'grey')
+
+                        with ui.row().classes('w-full items-start gap-2 p-1'):
+                            cb = ui.checkbox().props('dense')
+                            checkbox_refs[issue_id] = cb  # 保存引用
+                            cb.on_value_change(
+                                lambda e, iid=issue_id: selected_issues.add(iid) if e.value else selected_issues.discard(iid)
+                            )
+
+                            with ui.column().classes('flex-grow'):
+                                with ui.row().classes('items-center gap-1'):
+                                    ui.badge(severity, color=color).props('dense')
+                                    ui.label(f"[{issue.get('dimension', '未知')}]").classes('text-xs font-bold')
+                                ui.label(issue.get('description', '')).classes('text-sm')
+                                if issue.get('quote'):
+                                    quote_text = issue.get('quote', '')
+                                    ui.label(f"原文: \"{quote_text[:30]}...\"").classes('text-xs text-grey-5 italic')
+                                ui.label(f"建议: {issue.get('suggestion', '')}").classes('text-xs text-blue-600')
+
+        # 底部操作栏
+        def select_all_issues():
+            for pid, p_issues in issues_by_para.items():
+                for issue in p_issues:
+                    issue_id = issue.get('id', f"{pid}_{len(p_issues)}")
+                    selected_issues.add(issue_id)
+                    # 更新checkbox UI
+                    if issue_id in checkbox_refs:
+                        checkbox_refs[issue_id].value = True
+
+        def deselect_all():
+            selected_issues.clear()
+            # 更新所有checkbox UI
+            for cb in checkbox_refs.values():
+                cb.value = False
+
+        with ui.row().classes('w-full justify-between mt-2'):
+            ui.button('全选', on_click=select_all_issues).props('flat size=sm')
+            ui.button('取消全选', on_click=deselect_all).props('flat size=sm')
+            ui.button('取消', on_click=dialog.close).props('flat')
+            ui.button('开始修复', on_click=lambda: do_rewrite()).props('color=purple')
+
+    dialog.open()
+
+    async def do_rewrite():
+        if not selected_issues:
+            ui.notify('请至少选择一个问题', type='warning')
+            return
+
+        dialog.close()
+
+        # 收集需要修改的段落及其问题
+        paragraphs_to_rewrite = {}  # {paragraph_id: [issues]}
+        for pid, p_issues in issues_by_para.items():
+            for issue in p_issues:
+                issue_id = issue.get('id', f"{pid}_{len(p_issues)}")
+                if issue_id in selected_issues:
+                    if pid not in paragraphs_to_rewrite:
+                        paragraphs_to_rewrite[pid] = []
+                    paragraphs_to_rewrite[pid].append(issue)
+
+        if not paragraphs_to_rewrite:
+            ui.notify('没有选中任何问题', type='warning')
+            return
+
+        # 创建进度对话框
+        with ui.dialog() as progress_dialog, ui.card().classes('w-[700px] max-h-[90vh]'):
+            ui.label('🔄 正在修复...').classes('text-h6 mb-2')
+            progress_bar = ui.linear_progress(value=0).classes('w-full mb-2')
+            status_label = ui.label('准备中...').classes('text-sm text-grey-6 mb-2')
+
+            with ui.scroll_area().classes('w-full h-[50vh] border p-2 bg-grey-1'):
+                log_container = ui.column().classes('w-full')
+
+        progress_dialog.open()
+
+        total = len(paragraphs_to_rewrite)
+        completed = 0
+        success_count = 0
+
         try:
-            chunk = text_queue.get(timeout=0.05)
-            if chunk is stream_done:
-                break
-            if chunk.startswith("Error:"):
-                ui.notify('失败: ' + chunk, type='negative')
-                has_error = True
-                break
-            report += chunk
-            report_display.set_content(report)
-            await asyncio.sleep(0.01)
-        except queue.Empty:
-            await asyncio.sleep(0.01)
-            continue
+            # 获取最新的段落数据（只加载一次）
+            current_paragraphs = await run.io_bound(manager.load_chapter_paragraphs, chapter_id)
 
-    if not has_error:
-        # 保存报告
-        idx = app_state.current_chapter_idx
-        app_state.structure[idx]['review_report'] = report
-        await run.io_bound(manager.save_structure, app_state.structure)
+            # 记录需要更新的段落
+            updates = {}  # {paragraph_id: new_text}
 
-        # 更新侧边栏
-        review_panel_ref = ui_refs.get('review_panel')
-        if review_panel_ref:
-            review_panel_ref.clear()
-            with review_panel_ref: ui.markdown(report).classes('w-full text-sm p-2')
+            for pid, para_issues in paragraphs_to_rewrite.items():
+                status_label.set_text(f'正在修复段落{pid} ({completed+1}/{total})...')
 
-        ui.notify('审稿完成', type='positive')
+                # 找到原段落
+                original_para = None
+                for p in current_paragraphs:
+                    if p['id'] == pid:
+                        original_para = p
+                        break
+
+                if not original_para:
+                    with log_container:
+                        ui.label(f"❌ 段落{pid}未找到，跳过").classes('text-red text-xs')
+                    completed += 1
+                    continue
+
+                original_text = original_para['text']
+
+                # 调用重写
+                new_text, error = await run.io_bound(
+                    backend.sync_rewrite_paragraph,
+                    original_text,
+                    para_issues,
+                    ctx
+                )
+
+                with log_container:
+                    if error:
+                        ui.label(f"❌ 段落{pid}修复失败: {error}").classes('text-red text-xs')
+                    else:
+                        old_words = backend.count_words(original_text)['total_words']
+                        new_words = backend.count_words(new_text)['total_words']
+
+                        ui.label(f"✅ 段落{pid}修复完成 ({old_words}字 → {new_words}字)").classes('text-green text-xs')
+
+                        # 显示对比
+                        with ui.expansion('查看修改').classes('w-full ml-4'):
+                            with ui.row().classes('w-full gap-2'):
+                                with ui.column().classes('flex-1'):
+                                    ui.label('原文:').classes('text-xs font-bold')
+                                    ui.label(original_text[:200] + '...' if len(original_text) > 200 else original_text).classes('text-xs text-grey-6 bg-grey-1 p-1 rounded')
+                                with ui.column().classes('flex-1'):
+                                    ui.label('新文:').classes('text-xs font-bold')
+                                    ui.label(new_text[:200] + '...' if len(new_text) > 200 else new_text).classes('text-xs text-green-700 bg-green-50 p-1 rounded')
+
+                        # 记录更新（稍后统一应用）
+                        updates[pid] = new_text
+                        success_count += 1
+
+                completed += 1
+                progress_bar.set_value(completed / total)
+                await asyncio.sleep(0.05)
+
+            # 统一应用所有更新
+            if updates:
+                for pid, new_text in updates.items():
+                    for i, p in enumerate(current_paragraphs):
+                        if p['id'] == pid:
+                            current_paragraphs[i]['text'] = new_text
+                            current_paragraphs[i]['word_count'] = backend.count_words(new_text)['total_words']
+                            break
+
+                # 一次性保存所有更新
+                await run.io_bound(manager.save_chapter_paragraphs, chapter_id, current_paragraphs)
+
+            # 更新编辑器内容（设置标志防止触发自动保存）
+            global is_loading
+            is_loading = True
+            try:
+                final_text = manager.paragraphs_to_text(current_paragraphs)
+                content_ref = ui_refs.get('editor_content')
+                if content_ref:
+                    content_ref.value = final_text
+                    update_char_count()
+            finally:
+                is_loading = False
+
+            status_label.set_text(f'修复完成！成功: {success_count}/{total} 个段落')
+            ui.notify(f'修复完成，共修改 {success_count} 个段落', type='positive')
+
+            # 标记审稿意见为已修复（保留审稿记录供参考）
+            if 'review_data' in current_chapter:
+                current_chapter['review_data']['fixed_at'] = datetime.now().isoformat()
+                current_chapter['review_data']['fixed_count'] = success_count
+            await run.io_bound(manager.save_structure, app_state.structure)
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            status_label.set_text(f'修复失败: {str(e)}')
+            ui.notify(f'修复失败: {str(e)}', type='negative')
+
+        ui.button('关闭', on_click=progress_dialog.close).props('flat color=primary')
 
 async def open_state_audit_dialog():
     content_ref = ui_refs.get('editor_content')
@@ -1017,7 +1431,8 @@ def create_writing_tab():
                     # 【原有】历史按钮
                     ui.button('🕰️ 历史', on_click=open_history_dialog).props('color=grey outline').tooltip('查看历史版本快照')
                     ui.button('🌍 结算', on_click=open_state_audit_dialog).props('color=blue outline')
-                    ui.button('✨ 重绘', on_click=open_rewrite_dialog).props('color=purple outline')
+                    ui.button('✨ 重绘', on_click=open_rewrite_dialog).props('color=purple outline').tooltip('选中文字后重写')
+                    ui.button('📝 分段重绘', on_click=open_section_rewrite_dialog).props('color=deep-purple outline').tooltip('按审稿意见分段重写')
                     ui.button('🔍 审稿', on_click=open_review_dialog).props('color=orange outline')
                     
                     with ui.column().classes('ml-4 gap-0'):
