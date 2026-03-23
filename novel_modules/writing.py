@@ -3,6 +3,7 @@ import backend
 import json
 import asyncio
 import uuid
+import time
 from datetime import datetime
 from .state import app_state, ui_refs, manager, memory, CFG
 from . import timeline
@@ -57,12 +58,15 @@ async def perform_auto_save():
         now_str = datetime.now().strftime("%H:%M:%S")
         save_status_ref.set_text(f"☁️ 已自动保存 ({now_str})")
         save_status_ref.classes('text-green-600')
-        ui.timer(3.0, lambda: ui_refs.get('save_status').set_text('') if ui_refs.get('save_status') and ui_refs.get('save_status') is not None else None, once=True)
+        # 使用闭包捕获 save_status_ref，避免多次 get 调用
+        def clear_save_status(ref=save_status_ref):
+            if ref is not None:
+                ref.set_text('')
+        ui.timer(3.0, clear_save_status, once=True)
 
 async def run_auto_backup_check():
     global last_backup_time
-    import time
-    
+
     # 获取配置的间隔 (默认 30 分钟)
     interval_min = CFG.get('backup_interval', 30)
     if interval_min <= 0: return # 0 表示关闭

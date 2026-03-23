@@ -1,6 +1,7 @@
 import json
 import os
 import asyncio
+import time
 import chromadb
 from chromadb.utils import embedding_functions
 from openai import OpenAI
@@ -137,7 +138,7 @@ class WorldGraph:
         try:
             path = nx.shortest_path(self.G, start, end)
             return " -> ".join(path)
-        except:
+        except (nx.NetworkXError, nx.NodeNotFound, nx.NetworkXNoPath):
             return ""
     # 【新增】导出 ECharts 可视化数据
     def get_echarts_data(self):
@@ -214,6 +215,239 @@ def get_prompt(key):
 def get_default_prompts():
     """返回默认提示词配置"""
     return DEFAULT_PROMPTS.copy()
+
+# ================= 默认裂变策略配置 =================
+DEFAULT_VOLUME_FISSION_STRATEGIES = {
+    "time_based": {
+        "name": "时间裂变",
+        "description": "按时间顺序拆分为多个阶段",
+        "detailed_prompt": """请严格按照故事时间线规划，每个分卷代表主角人生的一个明确阶段。
+要求：
+1. 标注每个阶段的起止时间点（如：少年期 1-15岁）
+2. 每个阶段必须有明显的成长标志或关键事件
+3. 确保时间流动合理，避免跳跃过快
+4. 考虑主角实力与年龄的对应关系""",
+        "is_default": True
+    },
+    "space_based": {
+        "name": "空间裂变",
+        "description": "按空间位置拆分为多个场景",
+        "detailed_prompt": """请按空间/地域划分，每个分卷发生在不同的主要地点。
+要求：
+1. 明确每个地点的特色与危险等级
+2. 每个地点要有独特的势力、资源或机缘
+3. 地点转换要有合理的过渡（如传送、旅行）
+4. 考虑地图结构与主角成长路径的匹配""",
+        "is_default": True
+    },
+    "character_based": {
+        "name": "人物裂变",
+        "description": "从剧情中提取人物支线",
+        "detailed_prompt": """请围绕不同的人物支线来规划分卷。
+要求：
+1. 每个分卷聚焦一个主要人物的成长弧光
+2. 人物关系要有明确的变化节点
+3. 配角要有独立的故事线，不能只是主角的附庸
+4. 考虑多线叙事的交汇与分离""",
+        "is_default": True
+    },
+    "conflict_based": {
+        "name": "冲突裂变",
+        "description": "将主要冲突拆分为多个回合",
+        "detailed_prompt": """请将主要冲突拆分为多个回合/阶段。
+要求：
+1. 每个分卷围绕一个核心冲突
+2. 冲突要有明确的起因、发展、高潮、结果
+3. 每个冲突都要推动主角成长
+4. 大冲突可以包含多个小冲突""",
+        "is_default": True
+    },
+    "standard": {
+        "name": "标准裂变",
+        "description": "通用剧情拆分",
+        "detailed_prompt": """请按照通用的故事结构进行拆分。
+要求：
+1. 每个分卷有明确的主题和目标
+2. 确保剧情连贯性和逻辑性
+3. 合理分配剧情密度和节奏""",
+        "is_default": True
+    }
+}
+
+DEFAULT_CHAPTER_FISSION_STRATEGIES = {
+    "time_based": {
+        "name": "时间裂变",
+        "description": "按时间顺序规划章节",
+        "detailed_prompt": """请严格按时间顺序规划章节，每章代表一个明确的时间点或时间段。
+要求：
+1. 标注每章的时间节点
+2. 确保时间流动合理连贯
+3. 关键时间点要有标志性的情节
+4. 注意季节、日夜等时间细节""",
+        "is_default": True
+    },
+    "space_based": {
+        "name": "空间裂变",
+        "description": "按空间场景规划章节",
+        "detailed_prompt": """请按空间/场景划分章节，每章发生在不同的具体地点。
+要求：
+1. 每章有明确的主要场景
+2. 场景转换要有合理的过渡
+3. 利用场景特点设计剧情
+4. 注意场景的氛围营造""",
+        "is_default": True
+    },
+    "character_based": {
+        "name": "人物裂变",
+        "description": "围绕人物视角规划章节",
+        "detailed_prompt": """请围绕不同的人物视角或人物成长阶段来规划章节。
+要求：
+1. 每章聚焦特定人物或关系
+2. 展示人物的性格与成长
+3. 人物视角切换要自然
+4. 多视角叙事要有交汇点""",
+        "is_default": True
+    },
+    "conflict_based": {
+        "name": "冲突裂变",
+        "description": "围绕冲突展开规划章节",
+        "detailed_prompt": """请围绕冲突的展开来规划章节，每章代表冲突的一个回合或转折点。
+要求：
+1. 每章有明确的冲突或悬念
+2. 冲突要有层次递进
+3. 设置伏笔和转折
+4. 章节结尾要有钩子""",
+        "is_default": True
+    },
+    "standard": {
+        "name": "标准裂变",
+        "description": "自然剧情流规划章节",
+        "detailed_prompt": """请根据剧情自然流动划分章节，确保每章有明确的冲突和解决。
+要求：
+1. 每章有完整的起承转合
+2. 章节之间过渡自然
+3. 节奏张弛有度
+4. 控制章节长度均衡""",
+        "is_default": True
+    }
+}
+
+DEFAULT_SCENE_FISSION_STRATEGIES = {
+    "dialogue_based": {
+        "name": "对话驱动型",
+        "description": "以对话为核心驱动剧情发展",
+        "detailed_prompt": """每个场景围绕关键对话展开。
+要求：
+1. 场景开篇即进入对话或对话准备
+2. 对话必须有明确目的（信息交换、冲突升级、关系变化）
+3. 通过对话揭示人物性格和推动情节
+4. 避免无效闲聊，每句台词都要有功能""",
+        "is_default": True
+    },
+    "action_based": {
+        "name": "动作驱动型",
+        "description": "以动作为核心驱动剧情发展",
+        "detailed_prompt": """每个场景包含明确的动作序列。
+要求：
+1. 动作场景要有清晰的节奏（铺垫、爆发、收尾）
+2. 每个动作都要推动剧情或展示能力
+3. 注意动作的视觉化和感官描写
+4. 控制战斗时长，避免拖沓""",
+        "is_default": True
+    },
+    "emotion_based": {
+        "name": "情感驱动型",
+        "description": "以情感变化为核心驱动剧情发展",
+        "detailed_prompt": """每个场景聚焦情感转折。
+要求：
+1. 明确场景的情感起点和终点
+2. 通过细节展现情感变化过程
+3. 情感转折要有触发事件
+4. 注意情感的层次感和真实性""",
+        "is_default": True
+    },
+    "reveal_based": {
+        "name": "揭示驱动型",
+        "description": "以信息揭示为核心驱动剧情发展",
+        "detailed_prompt": """每个场景包含关键信息揭露。
+要求：
+1. 信息揭示要有悬念和惊喜感
+2. 控制信息量，避免一次性揭示过多
+3. 揭示时机要与剧情节奏配合
+4. 注意伏笔的铺垫与回收""",
+        "is_default": True
+    },
+    "standard": {
+        "name": "标准场景流",
+        "description": "标准的场景划分，包含完整的起承转合",
+        "detailed_prompt": """标准的场景划分，包含完整的起承转合。
+要求：
+1. 每个场景有明确的地点、人物、冲突
+2. 场景之间要有自然的过渡
+3. 控制单个场景的长度""",
+        "is_default": True
+    }
+}
+
+def get_fission_strategies(fission_type):
+    """获取指定类型的所有策略（默认 + 自定义）"""
+    defaults = {
+        "volume": DEFAULT_VOLUME_FISSION_STRATEGIES,
+        "chapter": DEFAULT_CHAPTER_FISSION_STRATEGIES,
+        "scene": DEFAULT_SCENE_FISSION_STRATEGIES
+    }
+    result = defaults.get(fission_type, {}).copy()
+    # 合并用户自定义策略
+    custom = CFG.get('fission_strategies', {}).get(fission_type, {})
+    result.update(custom)
+    return result
+
+def save_fission_strategy(fission_type, key, strategy):
+    """保存自定义策略到 config.json"""
+    if 'fission_strategies' not in CFG:
+        CFG['fission_strategies'] = {}
+    if fission_type not in CFG['fission_strategies']:
+        CFG['fission_strategies'][fission_type] = {}
+    CFG['fission_strategies'][fission_type][key] = strategy
+    save_global_config(CFG)
+
+def delete_fission_strategy(fission_type, key):
+    """删除自定义策略（仅限非默认策略）"""
+    strategies = CFG.get('fission_strategies', {}).get(fission_type, {})
+    if key in strategies and not strategies[key].get('is_default', False):
+        del strategies[key]
+        save_global_config(CFG)
+        return True
+    return False
+
+# ================= 默认模型配置 =================
+DEFAULT_MODELS = {
+    "writer": "deepseek-chat",
+    "architect": "deepseek-reasoner",
+    "editor": "deepseek-chat",
+    "reviewer": "deepseek-chat",
+    "timekeeper": "deepseek-chat",
+    "auditor": "deepseek-reasoner",
+    "summary": "deepseek-chat"
+}
+
+DEFAULT_TEMPERATURES = {
+    "writer": 1.3,
+    "architect": 1.0,
+    "editor": 0.7,
+    "reviewer": 0.5,
+    "timekeeper": 0.1,
+    "auditor": 0.6,
+    "summary": 0.5
+}
+
+def get_model(task_type):
+    """安全获取模型名称"""
+    return CFG.get('models', {}).get(task_type, DEFAULT_MODELS.get(task_type, "deepseek-chat"))
+
+def get_temperature(task_type):
+    """安全获取温度参数"""
+    return CFG.get('temperatures', {}).get(task_type, DEFAULT_TEMPERATURES.get(task_type, 0.7))
 
 # 【修复】延迟初始化 OpenAI 客户端，避免启动时无 API key 崩溃
 client = None
@@ -419,13 +653,13 @@ class NovelManager:
         try:
             with open(self.setting_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except:
+        except (FileNotFoundError, json.JSONDecodeError, PermissionError):
             return {}
 
     def save_settings(self, data):
         with open(self.setting_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
-    
+
     def load_characters(self):
         try:
             with open(self.char_file, 'r', encoding='utf-8') as f:
@@ -433,7 +667,8 @@ class NovelManager:
                 for char in data:
                     if 'relations' not in char: char['relations'] = []
                 return data
-        except: return []
+        except (FileNotFoundError, json.JSONDecodeError, PermissionError):
+            return []
 
     def save_characters(self, data):
         with open(self.char_file, 'w', encoding='utf-8') as f:
@@ -443,7 +678,7 @@ class NovelManager:
         try:
             with open(self.item_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except:
+        except (FileNotFoundError, json.JSONDecodeError, PermissionError):
             return []
 
     def save_items(self, data):
@@ -454,7 +689,7 @@ class NovelManager:
         try:
             with open(self.loc_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except:
+        except (FileNotFoundError, json.JSONDecodeError, PermissionError):
             return []
 
     def save_locations(self, data):
@@ -465,7 +700,7 @@ class NovelManager:
         try:
             with open(self.volume_file, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except:
+        except (FileNotFoundError, json.JSONDecodeError, PermissionError):
             return []
 
     def save_volumes(self, data):
@@ -482,7 +717,8 @@ class NovelManager:
                     if 'volume_id' not in chap:
                         chap['volume_id'] = "vol_default"
                 return data
-        except: return []
+        except (FileNotFoundError, json.JSONDecodeError, PermissionError):
+            return []
 
     def save_structure(self, data):
         # 清理不应保存到 structure.json 的字段
@@ -504,7 +740,10 @@ class NovelManager:
 
     def load_chapter_content(self, chapter_id):
         path = os.path.join(self.chapters_dir, f"{chapter_id}.txt")
-        return open(path, 'r', encoding='utf-8').read() if os.path.exists(path) else ""
+        if not os.path.exists(path):
+            return ""
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
 
     # ================= 段落级别存储（新增） =================
 
@@ -863,7 +1102,12 @@ class NovelManager:
 
         processed_snippets = []
         for item in debug_info:
-            source_id = int(item['source'].replace("第", "").replace("章", ""))
+            # 安全解析章节ID
+            try:
+                source_str = item['source'].replace("第", "").replace("章", "")
+                source_id = int(source_str)
+            except (ValueError, KeyError):
+                source_id = 0
             distance = current_chapter_id - source_id
             prefix = "[REF]"
             if 1 <= distance <= 3: prefix = "[SKIP-RECENT]"
@@ -1035,22 +1279,22 @@ class NovelManager:
     def create_project_backup(self, backup_dir="backups"):
         try:
             if not os.path.exists(backup_dir): os.makedirs(backup_dir)
-            
+
             # 生成带时间戳的文件名
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"novel_backup_{timestamp}"
             archive_path = os.path.join(backup_dir, filename)
-            
-            # 打包 data 目录
-            if os.path.exists("data"):
-                shutil.make_archive(archive_path, 'zip', "data")
-                
+
+            # 打包当前项目目录
+            if os.path.exists(self.root_dir):
+                shutil.make_archive(archive_path, 'zip', self.root_dir)
+
                 # 清理旧备份 (只保留最近 20 个)
                 backups = sorted(glob.glob(os.path.join(backup_dir, "*.zip")))
                 if len(backups) > 20:
                     for b in backups[:-20]:
                         try: os.remove(b)
-                        except: pass
+                        except OSError: pass
                 return f"已备份: {filename}.zip"
             return "数据目录不存在，跳过备份"
         except Exception as e:
@@ -1059,7 +1303,7 @@ class NovelManager:
     # 2. 创建章节快照 (History Snapshot)
     def create_chapter_snapshot(self, chapter_id, content):
         try:
-            snapshot_dir = os.path.join("data", "snapshots", str(chapter_id))
+            snapshot_dir = os.path.join(self.root_dir, "snapshots", str(chapter_id))
             if not os.path.exists(snapshot_dir): os.makedirs(snapshot_dir)
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1073,15 +1317,15 @@ class NovelManager:
             if len(files) > 50:
                 for f in files[:-50]:
                     try: os.remove(f)
-                    except: pass
+                    except OSError: pass
         except Exception as e:
             print(f"Snapshot error: {e}")
 
     # 3. 获取章节快照列表
     def get_chapter_snapshots(self, chapter_id):
-        snapshot_dir = os.path.join("data", "snapshots", str(chapter_id))
+        snapshot_dir = os.path.join(self.root_dir, "snapshots", str(chapter_id))
         if not os.path.exists(snapshot_dir): return []
-        
+
         snapshots = []
         files = sorted(glob.glob(os.path.join(snapshot_dir, "*.txt")), reverse=True)
         for f in files:
@@ -1089,13 +1333,14 @@ class NovelManager:
             try:
                 dt = datetime.strptime(ts_str, "%Y%m%d_%H%M%S")
                 display_time = dt.strftime("%Y-%m-%d %H:%M:%S")
-            except:
+            except ValueError:
                 display_time = ts_str
-            
+
             try:
                 with open(f, 'r', encoding='utf-8') as file:
                     preview = file.read(100).replace("\n", " ") + "..."
-            except: preview = "无法读取内容"
+            except (FileNotFoundError, PermissionError, OSError):
+                preview = "无法读取内容"
                 
             snapshots.append({"filename": f, "time": display_time, "preview": preview, "raw_ts": ts_str})
         return snapshots
@@ -1125,7 +1370,7 @@ class NovelManager:
             current_client = get_client()
 
             response = current_client.chat.completions.create(
-                model=CFG['models'].get('writer', 'gpt-3.5-turbo'), # 借用 writer 模型
+                model=get_model('writer'), # 借用 writer 模型
                 messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": prompt}],
                 temperature=0.9 # 灵感需要高创造性
             )
@@ -1433,8 +1678,8 @@ def classify_error(error):
     return ('UNKNOWN_ERROR', False, f'未知错误 ({error_type}): {error}')
 
 def sync_call_llm(prompt, system_prompt, task_type="writer"):
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 1.3)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     print(f"\n[LLM Router] 任务: {task_type} | 模型: {model_name}")
     print(f"[LLM Router] Prompt 长度: {len(prompt)} | System 长度: {len(system_prompt)}")
 
@@ -1446,7 +1691,6 @@ def sync_call_llm(prompt, system_prompt, task_type="writer"):
         try:
             if attempt > 0:
                 print(f"[LLM Router] 第 {attempt + 1} 次重试...")
-                import time
                 time.sleep(retry_delay * attempt)  # 递增延迟
 
             current_client = get_client()
@@ -1491,8 +1735,8 @@ def sync_call_llm(prompt, system_prompt, task_type="writer"):
 
 def stream_call_llm(prompt, system_prompt, task_type="writer"):
     """流式调用 LLM，返回生成器（同步生成器）"""
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 1.3)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     print(f"\n[LLM Router - Stream] 任务: {task_type} | 模型: {model_name}")
     try:
         current_client = get_client()
@@ -1516,8 +1760,8 @@ def stream_call_llm(prompt, system_prompt, task_type="writer"):
 
 async def async_stream_call_llm(prompt, system_prompt, task_type="writer"):
     """异步流式调用 LLM，返回异步生成器（适用于 NiceGUI）"""
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 1.3)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     print(f"\n[LLM Router - Async Stream] 任务: {task_type} | 模型: {model_name}")
     try:
         current_client = get_client()
@@ -1542,8 +1786,8 @@ async def async_stream_call_llm(prompt, system_prompt, task_type="writer"):
 
 def sync_rewrite_llm(selected_text, context_pre, context_post, instruction):
     task_type = "editor"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 0.7)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     prompt = f"【任务】重写文本。\n【上文】...{context_pre[-500:]}\n【待修改】{selected_text}\n【下文】{context_post[:500]}...\n【要求】{instruction}"
     try:
         current_client = get_client()
@@ -1562,8 +1806,8 @@ def sync_rewrite_llm(selected_text, context_pre, context_post, instruction):
 def stream_rewrite_llm(selected_text, context_pre, context_post, instruction):
     """流式调用重写 LLM，返回生成器"""
     task_type = "editor"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 0.7)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     prompt = f"【任务】重写文本。\n【上文】...{context_pre[-500:]}\n【待修改】{selected_text}\n【下文】{context_post[:500]}...\n【要求】{instruction}"
     try:
         current_client = get_client()
@@ -1583,8 +1827,8 @@ def stream_rewrite_llm(selected_text, context_pre, context_post, instruction):
 
 def sync_review_chapter(content, context_str):
     task_type = "reviewer"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 0.5)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     sys_prompt = get_prompt('reviewer_system')
     prompt = f"【待审查正文】\n{content}\n【参考设定】\n{context_str}\n【任务】审查逻辑一致性、剧情节奏、文笔。输出Markdown报告。"
     print(f"\n[审稿] 模型: {model_name} | 温度: {temperature}")
@@ -1597,7 +1841,6 @@ def sync_review_chapter(content, context_str):
         try:
             if attempt > 0:
                 print(f"[审稿] 第 {attempt + 1} 次重试...")
-                import time
                 time.sleep(retry_delay * attempt)
 
             current_client = get_client()
@@ -1638,8 +1881,8 @@ def sync_review_chapter(content, context_str):
 def stream_review_chapter(content, context_str):
     """流式调用审稿 LLM，返回生成器"""
     task_type = "reviewer"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 0.5)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     sys_prompt = get_prompt('reviewer_system')
     prompt = f"【待审查正文】\n{content}\n【参考设定】\n{context_str}\n【任务】审查逻辑一致性、剧情节奏、文笔。输出Markdown报告。"
     print(f"\n[审稿-流式] 模型: {model_name} | 温度: {temperature}")
@@ -1665,8 +1908,8 @@ def stream_review_chapter(content, context_str):
 
 def sync_analyze_time(content, prev_time_label):
     task_type = "timekeeper"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 0.1)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     sys_prompt = get_prompt('timekeeper_system')
     prompt = f"【上一章时间】{prev_time_label}\n【本章正文】{content[:3000]}...\n【任务】1.分析时间流逝 2.推算当前时间 3.提取事件\n【输出格式】严格JSON: {{\"label\": \"...\", \"duration\": \"...\", \"events\": [\"...\"]}}"
     print(f"\n[时间分析] 模型: {model_name} | 温度: {temperature}")
@@ -1679,7 +1922,6 @@ def sync_analyze_time(content, prev_time_label):
         try:
             if attempt > 0:
                 print(f"[时间分析] 第 {attempt + 1} 次重试...")
-                import time
                 time.sleep(retry_delay * attempt)
 
             current_client = get_client()
@@ -1720,8 +1962,8 @@ def sync_analyze_time(content, prev_time_label):
 # 【修改】状态分析接口：增加提取"地点连接"的指令
 def sync_analyze_state(content, current_data_summary):
     task_type = "auditor"
-    model_name = CFG['models'].get(task_type, "deepseek-reasoner")
-    temperature = CFG['temperatures'].get(task_type, 1.0)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     sys_prompt = get_prompt('auditor_system')
 
     prompt = f"""
@@ -1765,7 +2007,6 @@ def sync_analyze_state(content, current_data_summary):
         try:
             if attempt > 0:
                 print(f"[状态审计] 第 {attempt + 1} 次重试...")
-                import time
                 time.sleep(retry_delay * attempt)
 
             current_client = get_client()
@@ -1960,8 +2201,8 @@ def sync_review_section(section_text, section_id, context_str):
     返回该部分的审稿意见（JSON格式）
     """
     task_type = "reviewer"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 0.5)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     sys_prompt = get_prompt('reviewer_system')
 
     prompt = f"""【任务】审查以下段落（第{section_id}部分），输出JSON格式的审稿意见。
@@ -1998,7 +2239,6 @@ def sync_review_section(section_text, section_id, context_str):
     for attempt in range(max_retries):
         try:
             if attempt > 0:
-                import time
                 time.sleep(retry_delay * attempt)
 
             current_client = get_client()
@@ -2151,8 +2391,8 @@ def sync_rewrite_section(section_text, instruction, context_str):
     返回重写后的文本
     """
     task_type = "writer"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 1.3)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
 
     sys_prompt = get_prompt('writer_system')
 
@@ -2182,7 +2422,6 @@ def sync_rewrite_section(section_text, instruction, context_str):
     for attempt in range(max_retries):
         try:
             if attempt > 0:
-                import time
                 time.sleep(retry_delay * attempt)
 
             current_client = get_client()
@@ -2344,8 +2583,8 @@ def sync_review_chapter_by_paragraphs(paragraphs, context_str):
         }
     """
     task_type = "reviewer"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 0.5)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
     sys_prompt = get_prompt('reviewer_system')
 
     # 构建带段落标记的正文
@@ -2393,7 +2632,6 @@ def sync_review_chapter_by_paragraphs(paragraphs, context_str):
     for attempt in range(max_retries):
         try:
             if attempt > 0:
-                import time
                 time.sleep(retry_delay * attempt)
 
             current_client = get_client()
@@ -2486,8 +2724,8 @@ def sync_rewrite_paragraph(paragraph_text, issues, context_str):
         (new_text, error) 元组
     """
     task_type = "writer"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 1.0)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
 
     # 计算字数
     original_word_count = count_words(paragraph_text)['total_words']
@@ -2536,7 +2774,6 @@ def sync_rewrite_paragraph(paragraph_text, issues, context_str):
     for attempt in range(max_retries):
         try:
             if attempt > 0:
-                import time
                 time.sleep(retry_delay * attempt)
 
             current_client = get_client()
@@ -2607,8 +2844,8 @@ def sync_review_character_consistency(paragraphs, characters_info):
         {"score": 8, "issues": [...]}
     """
     task_type = "reviewer"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 0.3)  # 更低温度，更严格
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)  # 更低温度，更严格
 
     # 构建带段落标记的正文
     numbered_content = ""
@@ -2668,7 +2905,7 @@ def sync_review_character_consistency(paragraphs, characters_info):
             json_str = _clean_control_chars_in_json(clean[start:end+1])
             try:
                 parsed = json.loads(json_str)
-            except:
+            except json.JSONDecodeError:
                 parsed = _parse_json_aggressive(json_str)
 
             # 标准化issue格式
@@ -2708,8 +2945,8 @@ def sync_review_plot_logic(paragraphs, world_setting, chapter_outline):
         {"score": 8, "issues": [...]}
     """
     task_type = "reviewer"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 0.3)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
 
     numbered_content = ""
     for p in paragraphs:
@@ -2769,7 +3006,7 @@ def sync_review_plot_logic(paragraphs, world_setting, chapter_outline):
             json_str = _clean_control_chars_in_json(clean[start:end+1])
             try:
                 parsed = json.loads(json_str)
-            except:
+            except json.JSONDecodeError:
                 parsed = _parse_json_aggressive(json_str)
 
             issues = []
@@ -2806,8 +3043,8 @@ def sync_review_pacing(paragraphs):
         {"score": 8, "issues": [...]}
     """
     task_type = "reviewer"
-    model_name = CFG['models'].get(task_type, "deepseek-chat")
-    temperature = CFG['temperatures'].get(task_type, 0.3)
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
 
     numbered_content = ""
     for p in paragraphs:
@@ -2864,7 +3101,7 @@ def sync_review_pacing(paragraphs):
             json_str = _clean_control_chars_in_json(clean[start:end+1])
             try:
                 parsed = json.loads(json_str)
-            except:
+            except json.JSONDecodeError:
                 parsed = _parse_json_aggressive(json_str)
 
             issues = []

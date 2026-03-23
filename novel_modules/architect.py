@@ -5,40 +5,6 @@ from .state import app_state, manager, ui_refs
 from backend import CFG
 import uuid
 
-# ================= 🌀 裂变类型定义 =================
-FISSION_TYPES = {
-    "time_based": {
-        "name": "时间裂变",
-        "icon": "schedule",
-        "color": "blue",
-        "description": "按时间顺序拆分为多个阶段"
-    },
-    "space_based": {
-        "name": "空间裂变",
-        "icon": "place",
-        "color": "green",
-        "description": "按空间位置拆分为多个场景"
-    },
-    "character_based": {
-        "name": "人物裂变",
-        "icon": "people",
-        "color": "purple",
-        "description": "从剧情中提取人物支线"
-    },
-    "conflict_based": {
-        "name": "冲突裂变",
-        "icon": "flash_on",
-        "color": "red",
-        "description": "将主要冲突拆分为多个回合"
-    },
-    "standard": {
-        "name": "标准裂变",
-        "icon": "account_tree",
-        "color": "grey",
-        "description": "通用剧情拆分"
-    }
-}
-
 # ================= 📊 节点状态定义 =================
 NODE_STATUS = {
     "planned": {"name": "规划中", "icon": "edit_note", "color": "gray", "badge": "📝"},
@@ -271,59 +237,70 @@ def create_architect_ui():
                             with ui.row().classes('items-center gap-2'):
                                 ui.icon('info', size='xs', color='blue-500')
                                 ui.label('当前节点档案').classes('text-sm font-bold text-gray-700')
-                            
-                            # 节点状态显示与编辑
-                            if node_type in ['volume', 'chapter']:
-                                # 获取当前状态
-                                current_status = node_status_store.get(node_id, 'planned')
-                                status_info = NODE_STATUS.get(current_status, NODE_STATUS['planned'])
-                                status_badge = status_info['badge']
-                                status_color = status_info['color']
-                                
-                                # with ui.menu().props('anchor=bottom-end') as status_edit_menu:
-                                #     for status_key, status_info in NODE_STATUS.items():
-                                #         # 捕获循环变量的当前值
-                                #         current_status_key = status_key
-                                #         current_status_info = status_info
-                                        
-                                #         async def change_status(s=current_status_key, info=current_status_info):
-                                #             # 保存状态到内存存储
-                                #             node_status_store[node_id] = s
-                                #             ui.notify(f'状态已更改为: {info["name"]}', type='info')
-                                #             # 刷新树和面板
-                                #             refresh_tree()
-                                #             await update_panel(node_id)
-                                #             status_edit_menu.close()
-                                        
-                                #         ui.item(f"{current_status_info['badge']} {current_status_info['name']}", 
-                                #                on_click=change_status).props('dense')
-                                
-                                # ui.button(f"{status_badge} {status_info['name']}", 
-                                #          on_click=status_edit_menu.open) \
-                                #     .props(f'flat size=sm color={status_color}').classes('text-xs')
-                                
-                                # 1. 先用 with 定义按钮容器 (注意把原来的 on_click 删掉了，框架会自动绑定内部的 menu)
-                                with ui.button(f"{status_badge} {status_info['name']}") \
-                                        .props(f'flat size=sm color={status_color}').classes('text-xs'):
-                                    
-                                    # 2. 将 menu 直接嵌套在按钮内部
-                                    with ui.menu().props('anchor=top-end') as status_edit_menu:
-                                        for status_key, status_info in NODE_STATUS.items():
-                                            # 捕获循环变量的当前值
-                                            current_status_key = status_key
-                                            current_status_info = status_info
-                                            
-                                            async def change_status(s=current_status_key, info=current_status_info):
-                                                # 保存状态到内存存储
-                                                node_status_store[node_id] = s
-                                                ui.notify(f'状态已更改为: {info["name"]}', type='info')
-                                                # 刷新树和面板
-                                                refresh_tree()
-                                                await update_panel(node_id)
-                                                # status_edit_menu.close() # 嵌套后，点击通常会自动关闭，这行可有可无
-                                            
-                                            ui.menu_item(f"{current_status_info['badge']} {current_status_info['name']}", 
-                                                   on_click=change_status).props('dense')
+
+                            # 右侧：状态标签 + 编辑按钮
+                            with ui.row().classes('items-center gap-2'):
+                                # 编辑按钮
+                                async def open_edit():
+                                    show_edit_dialog(node_type, raw_data, ctx, on_save_callback=lambda: [
+                                        refresh_tree(),
+                                        update_panel(node_id)
+                                    ])
+                                ui.button(icon='edit', on_click=open_edit) \
+                                    .props('flat dense round size=sm color=purple').tooltip('编辑大纲')
+
+                                # 节点状态显示与编辑
+                                if node_type in ['volume', 'chapter']:
+                                    # 获取当前状态
+                                    current_status = node_status_store.get(node_id, 'planned')
+                                    status_info = NODE_STATUS.get(current_status, NODE_STATUS['planned'])
+                                    status_badge = status_info['badge']
+                                    status_color = status_info['color']
+
+                                    # with ui.menu().props('anchor=bottom-end') as status_edit_menu:
+                                    #     for status_key, status_info in NODE_STATUS.items():
+                                    #         # 捕获循环变量的当前值
+                                    #         current_status_key = status_key
+                                    #         current_status_info = status_info
+
+                                    #         async def change_status(s=current_status_key, info=current_status_info):
+                                    #             # 保存状态到内存存储
+                                    #             node_status_store[node_id] = s
+                                    #             ui.notify(f'状态已更改为: {info["name"]}', type='info')
+                                    #             # 刷新树和面板
+                                    #             refresh_tree()
+                                    #             await update_panel(node_id)
+                                    #             status_edit_menu.close()
+
+                                    #         ui.item(f"{current_status_info['badge']} {current_status_info['name']}",
+                                    #                on_click=change_status).props('dense')
+
+                                    # ui.button(f"{status_badge} {status_info['name']}",
+                                    #          on_click=status_edit_menu.open) \
+                                    #     .props(f'flat size=sm color={status_color}').classes('text-xs')
+
+                                    # 1. 先用 with 定义按钮容器 (注意把原来的 on_click 删掉了，框架会自动绑定内部的 menu)
+                                    with ui.button(f"{status_badge} {status_info['name']}") \
+                                            .props(f'flat size=sm color={status_color}').classes('text-xs'):
+
+                                        # 2. 将 menu 直接嵌套在按钮内部
+                                        with ui.menu().props('anchor=top-end') as status_edit_menu:
+                                            for status_key, status_info in NODE_STATUS.items():
+                                                # 捕获循环变量的当前值
+                                                current_status_key = status_key
+                                                current_status_info = status_info
+
+                                                async def change_status(s=current_status_key, info=current_status_info):
+                                                    # 保存状态到内存存储
+                                                    node_status_store[node_id] = s
+                                                    ui.notify(f'状态已更改为: {info["name"]}', type='info')
+                                                    # 刷新树和面板
+                                                    refresh_tree()
+                                                    await update_panel(node_id)
+                                                    # status_edit_menu.close() # 嵌套后，点击通常会自动关闭，这行可有可无
+
+                                                ui.menu_item(f"{current_status_info['badge']} {current_status_info['name']}",
+                                                       on_click=change_status).props('dense')
                         
                         # 核心内容：自然文本，无边框，易读
                         ui.markdown(ctx.get('self_info', '数据加载异常')).classes('text-base text-gray-800 leading-7 prose max-w-none')
@@ -355,6 +332,126 @@ def render_empty_state():
         ui.label('请在左侧选择一个节点').classes('text-xl font-bold text-gray-600')
         ui.label('点击结构树，开始您的分形创作之旅').classes('text-sm text-gray-400')
 
+# ================= 🌀 策略管理功能 =================
+
+def show_add_strategy_dialog(fission_type, on_save_callback=None):
+    """显示新增策略对话框"""
+    type_names = {
+        'volume': '分卷裂变',
+        'chapter': '章节裂变',
+        'scene': '场景裂变'
+    }
+
+    with ui.dialog() as dialog, ui.card().classes('w-[500px] p-6'):
+        ui.label(f'新增自定义{type_names.get(fission_type, "")}策略').classes('text-lg font-bold mb-4')
+
+        name_input = ui.input(label='策略名称').classes('w-full mb-2')
+        desc_input = ui.input(label='简短描述').classes('w-full mb-2')
+        prompt_input = ui.textarea(label='详细指令',
+            placeholder='请输入策略的具体执行指令，越详细AI执行越准确...') \
+            .classes('w-full mb-4').props('rows=8')
+
+        with ui.row().classes('justify-end gap-2 w-full'):
+            ui.button('取消', on_click=dialog.close).props('flat')
+            def do_save():
+                if not name_input.value or not prompt_input.value:
+                    ui.notify('请填写策略名称和详细指令', type='warning')
+                    return
+                key = f"custom_{uuid.uuid4().hex[:8]}"
+                strategy = {
+                    'name': name_input.value,
+                    'description': desc_input.value or '',
+                    'detailed_prompt': prompt_input.value,
+                    'is_default': False
+                }
+                backend.save_fission_strategy(fission_type, key, strategy)
+                ui.notify('策略已保存', type='positive')
+                dialog.close()
+                if on_save_callback:
+                    on_save_callback()
+            ui.button('保存', on_click=do_save).props('unelevated color=purple')
+
+        dialog.open()
+
+def refresh_ui():
+    """刷新UI（用于策略保存后的界面刷新）"""
+    ui.notify('请刷新页面以加载新策略', type='info')
+
+# ================= ✏️ 大纲编辑功能 =================
+
+def show_edit_dialog(node_type, raw_data, ctx, on_save_callback=None):
+    """显示编辑大纲对话框"""
+    type_names = {
+        'root': '全书规划',
+        'volume': '分卷',
+        'chapter': '章节'
+    }
+
+    with ui.dialog() as dialog, ui.card().classes('w-[600px] p-6'):
+        ui.label(f'编辑{type_names.get(node_type, "")}信息').classes('text-lg font-bold mb-4')
+
+        # 根节点：编辑全书简介
+        if node_type == 'root':
+            title_input = ui.input(label='书名', value=raw_data.get('title', '')) \
+                .classes('w-full mb-2')
+            summary_input = ui.textarea(label='全书简介/核心构思',
+                value=ctx.get('self_info', ''),
+                placeholder='描述全书的核心设定、主线剧情...') \
+                .classes('w-full mb-4').props('rows=10')
+
+        # 分卷：编辑标题和描述
+        elif node_type == 'volume':
+            title_input = ui.input(label='分卷标题', value=raw_data.get('title', '')) \
+                .classes('w-full mb-2')
+            desc_input = ui.textarea(label='分卷描述/目标',
+                value=raw_data.get('desc', ''),
+                placeholder='描述本分卷的核心目标、关键事件...') \
+                .classes('w-full mb-4').props('rows=10')
+
+        # 章节：编辑标题和大纲
+        elif node_type == 'chapter':
+            title_input = ui.input(label='章节标题', value=raw_data.get('title', '')) \
+                .classes('w-full mb-2')
+            outline_input = ui.textarea(label='章节大纲/场景流',
+                value=raw_data.get('outline', ''),
+                placeholder='详细描述本章的场景、冲突、转折...') \
+                .classes('w-full mb-4').props('rows=12')
+
+        with ui.row().classes('justify-end gap-2 w-full'):
+            ui.button('取消', on_click=dialog.close).props('flat')
+            async def do_save():
+                # 根据节点类型保存不同的数据
+                if node_type == 'root':
+                    # 保存书名和简介到 settings
+                    settings = await run.io_bound(manager.load_settings)
+                    if title_input.value:
+                        settings['book_name'] = title_input.value
+                    settings['book_summary'] = summary_input.value
+                    await run.io_bound(manager.save_settings, settings)
+                    # 更新 app_state
+                    app_state.settings = settings
+
+                elif node_type == 'volume':
+                    # 更新分卷数据
+                    raw_data['title'] = title_input.value
+                    raw_data['desc'] = desc_input.value
+                    await run.io_bound(manager.save_volumes, app_state.volumes)
+
+                elif node_type == 'chapter':
+                    # 更新章节数据
+                    raw_data['title'] = title_input.value
+                    raw_data['outline'] = outline_input.value
+                    await run.io_bound(manager.save_structure, app_state.structure)
+
+                ui.notify('保存成功', type='positive')
+                dialog.close()
+                if on_save_callback:
+                    on_save_callback()
+
+            ui.button('保存', on_click=do_save).props('unelevated color=purple')
+
+        dialog.open()
+
 # ================= 🎮 操作面板 (样式升级) =================
 
 def render_root_actions(ctx):
@@ -372,8 +469,12 @@ def render_root_actions(ctx):
             with ui.column().classes('w-1/3 gap-6 min-w-[250px] bg-gray-50 p-4 rounded-lg border border-gray-100'):
                 # 🌀 裂变类型选择
                 ui.label('🌀 裂变策略').classes('text-xs font-bold text-gray-500')
-                fission_options = {k: f"{v['name']} - {v['description']}" for k, v in FISSION_TYPES.items()}
-                fission_type = ui.select(fission_options, value='standard').classes('w-full').props('outlined dense bg-white')
+                fission_strategies = backend.get_fission_strategies('volume')
+                fission_options = {k: v['name'] for k, v in fission_strategies.items()}
+                with ui.row().classes('w-full gap-1 items-center'):
+                    fission_type = ui.select(fission_options, value='standard').classes('flex-grow').props('outlined dense bg-white')
+                    ui.button(icon='add', on_click=lambda: show_add_strategy_dialog('volume', refresh_ui)) \
+                        .props('flat dense round color=purple').tooltip('新增自定义策略')
 
                 # 模板选择
                 ui.label('📚 叙事模型').classes('text-xs font-bold text-gray-500 mt-2')
@@ -405,32 +506,20 @@ def render_root_actions(ctx):
             print(f">>> [DEBUG] 2. API Key 检查通过: {api_key[:4]}***")
 
             # 2. 根据裂变类型构建不同的Prompt
-            fission_info = FISSION_TYPES.get(fission_type.value, FISSION_TYPES['standard'])
+            strategies = backend.get_fission_strategies('volume')
+            fission_info = strategies.get(fission_type.value, strategies.get('standard', {}))
 
             prompt = f"""
             你是一个网文主编。请基于以下信息，为全书规划 {vol_count.value} 个左右的【分卷 (Volumes)】。
 
-            【裂变策略】{fission_info['name']} - {fission_info['description']}
+            【裂变策略】{fission_info.get('name', '标准裂变')}
+            【策略说明】{fission_info.get('detailed_prompt', fission_info.get('description', ''))}
             【全书核心】{ctx.get('self_info', '')}
             【用户引导】{guidance.value}
             【叙事模型】{template.value}
 
-            【特殊要求】
+            要求：JSON格式列表，包含 title, desc, estimated_chapters（预估章节数）。
             """
-
-            # 根据裂变类型添加特殊指令
-            if fission_type.value == 'time_based':
-                prompt += "请严格按时间顺序规划，每个分卷代表一个明确的时间段（如：少年期、青年期、巅峰期）。"
-            elif fission_type.value == 'space_based':
-                prompt += "请按空间/地域划分，每个分卷发生在不同的主要地点（如：新手村、主城、秘境）。"
-            elif fission_type.value == 'character_based':
-                prompt += "请围绕不同的人物支线来规划分卷，每个分卷聚焦一个主要人物的成长弧光。"
-            elif fission_type.value == 'conflict_based':
-                prompt += "请围绕核心冲突的演变来规划分卷，每个分卷代表冲突的一个阶段（如：冲突酝酿、爆发、高潮、解决）。"
-            else:
-                prompt += "请根据剧情发展阶段自然划分分卷，确保每个分卷有明确的起承转合。"
-
-            prompt += "\n\n要求：JSON格式列表，包含 title, desc, estimated_chapters（预估章节数）。"
 
             print(f">>> [DEBUG] 3. Prompt 构建完成 (长度: {len(prompt)})")
 
@@ -460,23 +549,54 @@ def render_root_actions(ctx):
                 return
             print(f">>> [DEBUG] 2. API Key 检查通过: {api_key[:4]}***")
 
-            # 构建生成世界观的提示词
-            prompt = f"""
-            请基于以下信息生成一个完整的世界观设定：
+            # 获取已有世界观
+            existing_world_view = app_state.settings.get('world_view', '')
 
-            【全书核心】{ctx.get('self_info', '')}
-            【用户引导】{guidance.value}
-            【叙事模型】{template.value}
+            # 构建增量生成的提示词
+            if existing_world_view:
+                # 已有世界观 → 增量补充模式
+                prompt = f"""
+你是一个网文世界观架构师。现在需要进行**增量补充**，而非从头生成。
 
-            请生成详细的世界观设定，包括但不限于：
-            1. 世界基本设定（时空背景、社会结构、修炼/职业体系等）
-            2. 主要势力分布（门派、国家、组织等）
-            3. 人物等级体系（实力划分、境界设定等）
-            4. 重要物品/道具体系（武器、丹药、功法等）
-            5. 世界规则（魔法系统、科技水平、法律法规等）
+【全书核心】{ctx.get('self_info', '')}
+【用户引导】{guidance.value}
+【叙事模型】{template.value}
 
-            请用结构化的格式输出，便于后续写作时查阅。
-            """
+【⚠️ 已有世界观设定】
+{existing_world_view[:2000]}
+
+---
+**重要规则**：
+1. 仔细阅读已有设定，不要重复已经描述过的内容
+2. 只补充现有设定中缺失或不够详细的部分
+3. 如果新内容与已有设定可能产生歧义，请明确标注"补充说明"
+4. 保持与已有设定的一致性，不要产生矛盾
+5. 输出格式要简洁，可以直接追加到现有设定后面
+
+请补充以下内容（如果已有则跳过）：
+- 尚未详细描述的势力或组织
+- 缺失的等级体系细节
+- 未覆盖的地理区域
+- 重要但未提及的规则或设定
+"""
+            else:
+                # 无世界观 → 首次生成模式
+                prompt = f"""
+请基于以下信息生成一个完整的世界观设定：
+
+【全书核心】{ctx.get('self_info', '')}
+【用户引导】{guidance.value}
+【叙事模型】{template.value}
+
+请生成详细的世界观设定，包括但不限于：
+1. 世界基本设定（时空背景、社会结构、修炼/职业体系等）
+2. 主要势力分布（门派、国家、组织等）
+3. 人物等级体系（实力划分、境界设定等）
+4. 重要物品/道具体系（武器、丹药、功法等）
+5. 世界规则（魔法系统、科技水平、法律法规等）
+
+请用结构化的格式输出，便于后续写作时查阅。
+"""
 
             print(f">>> [DEBUG] 3. 世界观Prompt 构建完成 (长度: {len(prompt)})")
 
@@ -506,8 +626,12 @@ def render_volume_actions(ctx, vol_data):
             with ui.column().classes('w-1/3 gap-5 min-w-[250px] bg-gray-50 p-4 rounded-lg border border-gray-100'):
                 # 🌀 裂变类型选择
                 ui.label('🌀 章节裂变策略').classes('text-xs font-bold text-gray-500')
-                fission_options = {k: f"{v['name']}" for k, v in FISSION_TYPES.items()}
-                fission_type = ui.select(fission_options, value='standard').classes('w-full').props('outlined dense bg-white')
+                fission_strategies = backend.get_fission_strategies('chapter')
+                fission_options = {k: v['name'] for k, v in fission_strategies.items()}
+                with ui.row().classes('w-full gap-1 items-center'):
+                    fission_type = ui.select(fission_options, value='standard').classes('flex-grow').props('outlined dense bg-white')
+                    ui.button(icon='add', on_click=lambda: show_add_strategy_dialog('chapter', refresh_ui)) \
+                        .props('flat dense round color=purple').tooltip('新增自定义策略')
 
                 ui.label('🎭 风格与节奏').classes('text-xs font-bold text-gray-500 mt-2')
                 template = ui.select(['爽文打脸流', '三幕式结构', '悬疑解谜流', '日常种田流'], value='爽文打脸流').classes('w-full').props('outlined dense bg-white')
@@ -516,32 +640,20 @@ def render_volume_actions(ctx, vol_data):
                 count = ui.number(value=15, min=1, max=100).classes('w-full').props('outlined dense bg-white suffix="章"')
 
         async def do_plan():
-            fission_info = FISSION_TYPES.get(fission_type.value, FISSION_TYPES['standard'])
+            strategies = backend.get_fission_strategies('chapter')
+            fission_info = strategies.get(fission_type.value, strategies.get('standard', {}))
 
             prompt = f"""
             你是一个网文架构师。请将【{vol_data['title']}】拆解为 {int(count.value)} 个左右的章节。
 
-            【裂变策略】{fission_info['name']} - {fission_info['description']}
+            【裂变策略】{fission_info.get('name', '标准裂变')}
+            【策略说明】{fission_info.get('detailed_prompt', fission_info.get('description', ''))}
             【本卷目标】{ctx['self_info']}
             【用户引导】{guidance.value}
             【风格模型】{template.value}
 
-            【特殊要求】
+            要求：JSON格式列表，包含 title, outline, estimated_words（预估字数）。
             """
-
-            # 根据裂变类型添加特殊指令
-            if fission_type.value == 'time_based':
-                prompt += "请严格按时间顺序规划章节，每章代表一个明确的时间点或时间段。"
-            elif fission_type.value == 'space_based':
-                prompt += "请按空间/场景划分章节，每章发生在不同的具体地点。"
-            elif fission_type.value == 'character_based':
-                prompt += "请围绕不同的人物视角或人物成长阶段来规划章节。"
-            elif fission_type.value == 'conflict_based':
-                prompt += "请围绕冲突的展开来规划章节，每章代表冲突的一个回合或转折点。"
-            else:
-                prompt += "请根据剧情自然流程度划分章节，确保每章有明确的冲突和解决。"
-
-            prompt += "\n\n要求：JSON格式列表，包含 title, outline, estimated_words（预估字数）。"
 
             await call_ai_and_preview(prompt, 'create_chapters', parent_id=vol_data['id'], fission_type=fission_type.value)
 
@@ -561,23 +673,49 @@ def render_volume_actions(ctx, vol_data):
                 return
             print(f">>> [DEBUG] 2. API Key 检查通过: {api_key[:4]}***")
 
-            # 构建生成世界观的提示词
-            prompt = f"""
-            请基于以下信息为【{vol_data['title']}】这一分卷生成详细的世界观设定：
+            # 构建增量生成的提示词
+            existing_world_view = app_state.settings.get('world_view', '')
 
-            【本卷核心】{ctx['self_info']}
-            【全书世界观】{app_state.settings.get('world_view', '暂无')}
-            【用户引导】{guidance.value}
-            【风格模型】{template.value}
+            if existing_world_view:
+                prompt = f"""
+你是一个网文世界观架构师。现在需要为分卷【{vol_data['title']}】进行**增量补充**。
 
-            请重点描述这一分卷中的特殊设定，包括但不限于：
-            1. 本分卷涉及的地点与环境
-            2. 本分卷中出现的新势力或重要人物
-            3. 本分卷特有的规则或变化
-            4. 本分卷中的关键物品或资源
+【本卷核心】{ctx['self_info']}
+【用户引导】{guidance.value}
+【风格模型】{template.value}
 
-            请注意与全书世界观保持一致，只补充本分卷的细节。
-            """
+【⚠️ 已有全书世界观】
+{existing_world_view[:2000]}
+
+---
+**重要规则**：
+1. 仔细阅读全书世界观，不要重复已有内容
+2. 只补充本分卷特有的、全书设定中未提及的内容
+3. 必须与全书世界观保持一致，如有冲突以全书设定为准
+4. 重点描述本分卷的独特性，而非泛泛而谈
+
+请补充本分卷特有的设定（如果全书已详细描述则跳过）：
+- 本分卷独有的地点或区域细节
+- 本分卷出现的新势力或新人物
+- 本分卷特有的规则或限制
+- 本分卷的关键物品或资源
+"""
+            else:
+                prompt = f"""
+请基于以下信息为【{vol_data['title']}】这一分卷生成详细的世界观设定：
+
+【本卷核心】{ctx['self_info']}
+【用户引导】{guidance.value}
+【风格模型】{template.value}
+
+请重点描述这一分卷中的特殊设定，包括但不限于：
+1. 本分卷涉及的地点与环境
+2. 本分卷中出现的新势力或重要人物
+3. 本分卷特有的规则或变化
+4. 本分卷中的关键物品或资源
+
+请用结构化的格式输出，便于后续写作时查阅。
+"""
 
             print(f">>> [DEBUG] 3. 分卷世界观Prompt 构建完成 (长度: {len(prompt)})")
 
@@ -605,14 +743,12 @@ def render_chapter_actions(ctx, chap_data):
             with ui.column().classes('w-1/3 gap-4 min-w-[250px] bg-gray-50 p-4 rounded-lg border border-gray-100'):
                 # 🌀 场景裂变类型选择
                 ui.label('🌀 场景裂变策略').classes('text-xs font-bold text-gray-500')
-                scene_fission_options = {
-                    'dialogue_based': '对话驱动型',
-                    'action_based': '动作驱动型',
-                    'emotion_based': '情感驱动型',
-                    'reveal_based': '揭示驱动型',
-                    'standard': '标准场景流'
-                }
-                scene_fission_type = ui.select(scene_fission_options, value='standard').classes('w-full').props('outlined dense bg-white')
+                fission_strategies = backend.get_fission_strategies('scene')
+                fission_options = {k: v['name'] for k, v in fission_strategies.items()}
+                with ui.row().classes('w-full gap-1 items-center'):
+                    scene_fission_type = ui.select(fission_options, value='standard').classes('flex-grow').props('outlined dense bg-white')
+                    ui.button(icon='add', on_click=lambda: show_add_strategy_dialog('scene', refresh_ui)) \
+                        .props('flat dense round color=purple').tooltip('新增自定义策略')
 
                 with ui.row().classes('justify-between w-full mt-2'):
                     ui.label('场景切分 (Beats)').classes('text-xs font-bold text-gray-500')
@@ -624,21 +760,14 @@ def render_chapter_actions(ctx, chap_data):
                 ui.label('提示：场景是写作的最小单位，包含地点、人物和冲突。').classes('text-xs text-gray-400 italic leading-tight')
 
         async def do_plan():
-            # 场景裂变类型描述
-            scene_fission_descriptions = {
-                'dialogue_based': '以对话为核心驱动剧情发展，每个场景围绕关键对话展开',
-                'action_based': '以动作为核心驱动剧情发展，每个场景包含明确的动作序列',
-                'emotion_based': '以情感变化为核心驱动剧情发展，每个场景聚焦情感转折',
-                'reveal_based': '以信息揭示为核心驱动剧情发展，每个场景包含关键信息揭露',
-                'standard': '标准的场景划分，包含完整的起承转合'
-            }
-
-            fission_desc = scene_fission_descriptions.get(scene_fission_type.value, scene_fission_descriptions['standard'])
+            strategies = backend.get_fission_strategies('scene')
+            fission_info = strategies.get(scene_fission_type.value, strategies.get('standard', {}))
 
             prompt = f"""
             微观剧情设计：将【{chap_data['title']}】拆解为 {scene_count.value} 个具体的【场景】。
 
-            【场景策略】{fission_desc}
+            【场景策略】{fission_info.get('name', '标准场景流')}
+            【策略说明】{fission_info.get('detailed_prompt', fission_info.get('description', ''))}
             【本章大纲】{guidance.value}
             【上级分卷】{ctx['parent_info']}
 
@@ -662,23 +791,49 @@ def render_chapter_actions(ctx, chap_data):
                 return
             print(f">>> [DEBUG] 2. API Key 检查通过: {api_key[:4]}***")
 
-            # 构建生成世界观的提示词
-            prompt = f"""
-            请基于以下信息为【{chap_data['title']}】这一章节生成详细的世界观细节：
+            # 构建增量生成的提示词
+            existing_world_view = app_state.settings.get('world_view', '')
 
-            【本章大纲】{guidance.value}
-            【本章目标】{ctx['self_info']}
-            【上级分卷世界观】{ctx['parent_info']}
-            【全书世界观】{app_state.settings.get('world_view', '暂无')}
+            if existing_world_view:
+                prompt = f"""
+你是一个网文世界观架构师。现在需要为章节【{chap_data['title']}】进行**增量补充**。
 
-            请重点描述这一章节中的具体设定，包括但不限于：
-            1. 本章涉及的具体地点和环境描述
-            2. 本章中出现的特定人物及其状态
-            3. 本章中的关键道具或资源
-            4. 本章涉及的特殊规则或情境
+【本章大纲】{guidance.value}
+【本章目标】{ctx['self_info']}
+【上级分卷】{ctx['parent_info']}
 
-            请注意与全书和分卷世界观保持一致，只补充本章节的细节。
-            """
+【⚠️ 已有全书世界观】
+{existing_world_view[:1500]}
+
+---
+**重要规则**：
+1. 仔细阅读已有世界观，不要重复已有内容
+2. 只补充本章特有的、极其具体的细节（如具体房间布局、NPC名字等）
+3. 必须与已有设定保持一致，如有冲突以已有设定为准
+4. 章节级别的世界观应该是"细节补充"而非"宏大设定"
+
+请只补充本章特有的微观细节（如果已有则跳过）：
+- 本章涉及的具体场景/房间的详细描述
+- 本章出现的临时NPC或路人
+- 本章使用的具体物品或道具
+- 本章发生时的时间、天气等环境细节
+"""
+            else:
+                prompt = f"""
+请基于以下信息为【{chap_data['title']}】这一章节生成详细的世界观细节：
+
+【本章大纲】{guidance.value}
+【本章目标】{ctx['self_info']}
+【上级分卷】{ctx['parent_info']}
+
+请重点描述这一章节中的具体设定，包括但不限于：
+1. 本章涉及的具体地点和环境描述
+2. 本章中出现的特定人物及其状态
+3. 本章中的关键道具或资源
+4. 本章涉及的特殊规则或情境
+
+请用结构化的格式输出，便于后续写作时查阅。
+"""
 
             print(f">>> [DEBUG] 3. 章节世界观Prompt 构建完成 (长度: {len(prompt)})")
 
@@ -700,37 +855,43 @@ def render_chapter_actions(ctx, chap_data):
 
 async def call_ai_and_preview(prompt, action_type, **kwargs):
     print(f">>> [DEBUG] A. 进入 call_ai_and_preview (Type: {action_type})")
-    
-    # 获取裂变类型
+
+    # 获取裂变类型 - 根据 action_type 确定策略类型
     fission_type = kwargs.get('fission_type', 'standard')
-    fission_info = FISSION_TYPES.get(fission_type, FISSION_TYPES['standard'])
+    if action_type == 'create_volumes':
+        strategies = backend.get_fission_strategies('volume')
+    elif action_type == 'create_chapters':
+        strategies = backend.get_fission_strategies('chapter')
+    else:
+        strategies = backend.get_fission_strategies('scene')
+    fission_info = strategies.get(fission_type, strategies.get('standard', {'name': '标准裂变', 'description': '通用剧情拆分'}))
 
     result_area = ui.dialog().classes('backdrop-blur-sm')
-    
+
     # 弹窗本体
     with result_area, ui.card().classes('w-3/4 h-5/6 flex flex-col rounded-2xl shadow-2xl p-0 overflow-hidden'):
-        
+
         # 1. 顶部 Header
         with ui.row().classes('w-full items-center justify-between bg-gray-900 text-white p-4 shrink-0'):
             with ui.row().classes('items-center gap-2'):
-                ui.icon(fission_info.get('icon', 'smart_toy'), color='purple-300')
+                ui.icon('smart_toy', color='purple-300')
                 ui.label('AI 分形裂变结果').classes('text-lg font-bold')
-                
+
                 # 显示裂变类型标签
-                with ui.badge(fission_info['name'], color=fission_info['color']).classes('ml-2'):
+                with ui.badge(fission_info.get('name', '裂变'), color='purple').classes('ml-2'):
                     pass
-            
+
             ui.button(icon='close', on_click=result_area.close).props('flat round dense color=white')
-            
+
         # 2. 内容容器 (关键：这里只定义容器，不预先创建内部元素)
         content_wrapper = ui.column().classes('w-full flex-grow relative bg-gray-50')
-        
+
         # 3. 初始显示 Loading
         with content_wrapper:
             with ui.column().classes('absolute-center items-center gap-4'):
-                ui.spinner('dots', size='4rem', color=fission_info['color'])
-                ui.label(f'{fission_info["name"]}裂变中...').classes('text-purple-600 font-bold animate-pulse')
-                ui.label(fission_info['description']).classes('text-sm text-gray-400')
+                ui.spinner('dots', size='4rem', color='purple')
+                ui.label(f'{fission_info.get("name", "裂变")}裂变中...').classes('text-purple-600 font-bold animate-pulse')
+                ui.label(fission_info.get('description', '')).classes('text-sm text-gray-400')
 
         result_area.open()
 
@@ -759,28 +920,28 @@ async def call_ai_and_preview(prompt, action_type, **kwargs):
                     
                     # 显示裂变信息标题
                     with ui.row().classes('items-center gap-3 mb-4'):
-                        ui.icon(fission_info.get('icon', 'account_tree'), size='lg', color=fission_info['color'])
+                        ui.icon('account_tree', size='lg', color='green')
                         with ui.column().classes('gap-0'):
-                            ui.label(f'🎉 {fission_info["name"]}裂变成功！').classes('text-green-600 font-bold text-lg')
-                            # 
+                            ui.label(f'🎉 {fission_info.get("name", "裂变")}裂变成功！').classes('text-green-600 font-bold text-lg')
+                            #
                             # 用一个简单的字典把 action_type 翻译成中文
                             target_name_map = {
-                                'create_volumes': '分卷', 
-                                'create_chapters': '章节', 
+                                'create_volumes': '分卷',
+                                'create_chapters': '章节',
                                 'create_scenes': '场景'
                             }
                             target_name = target_name_map.get(action_type, '节点') # 找不到默认叫"节点"
 
                             # 然后再渲染 label
                             ui.label(f'生成 {len(data)} 个{target_name}').classes('text-gray-500 text-sm')
-                    
+
                     # 裂变策略说明
                     with ui.card().classes('w-full bg-blue-50 border border-blue-200 p-3 mb-4'):
                         with ui.row().classes('items-start gap-2'):
                             ui.icon('info', color='blue-500', size='sm').classes('mt-0.5')
                             with ui.column().classes('gap-1'):
                                 ui.label('裂变策略说明').classes('text-xs font-bold text-blue-700')
-                                ui.label(fission_info['description']).classes('text-xs text-blue-600')
+                                ui.label(fission_info.get('description', '')).classes('text-xs text-blue-600')
                     
                     # 帮助函数：获取目标名称
                     def get_target_name(action_type):
@@ -909,11 +1070,15 @@ def run_architect(theme, slider): pass
 
 # ================= 🌍 世界观生成功能 =================
 
-async def generate_world_view_preview(prompt):
+async def generate_world_view_preview(prompt, auto_save=True):
     """
     生成世界观设定的预览窗口
+
+    Args:
+        prompt: 生成世界观的提示词
+        auto_save: 是否自动保存（追加到现有世界观），默认为 True
     """
-    print(f">>> [DEBUG] A. 进入 generate_world_view_preview")
+    print(f">>> [DEBUG] A. 进入 generate_world_view_preview (auto_save={auto_save})")
 
     result_area = ui.dialog().classes('backdrop-blur-sm')
 
@@ -947,7 +1112,38 @@ async def generate_world_view_preview(prompt):
             print(f"[架构师-世界观] LLM 返回: {len(res)} chars")
 
             # ==========================================
-            # 【核心修复】直接清空容器，从头绘制结果
+            # 自动保存模式：直接追加并保存
+            # ==========================================
+            if auto_save:
+                # 获取当前世界观
+                current_world_view = app_state.settings.get('world_view', '')
+                new_world_view = current_world_view + ('\n\n---\n\n' if current_world_view else '') + res
+                app_state.settings['world_view'] = new_world_view
+
+                # 保存到后端
+                await run.io_bound(manager.save_settings, app_state.settings)
+
+                # 更新 Codemirror 编辑器的值（如果存在的话）
+                if 'world_editor' in ui_refs and ui_refs['world_editor'] is not None:
+                    ui_refs['world_editor'].value = new_world_view
+
+                # 清空容器，显示成功提示
+                content_wrapper.clear()
+                with content_wrapper:
+                    with ui.column().classes('w-full h-full items-center justify-center p-6'):
+                        ui.icon('check_circle', size='4rem', color='teal')
+                        ui.label('🎉 世界观已自动保存！').classes('text-xl font-bold text-teal-600 mt-4')
+                        ui.label('新内容已追加到世界观设定中').classes('text-gray-500 mt-2')
+
+                        # 预览按钮
+                        with ui.expansion('📖 预览生成内容', icon='visibility').classes('w-full mt-4 bg-white rounded-lg'):
+                            ui.markdown(res).classes('text-sm text-gray-700')
+
+                        ui.button('关闭', on_click=result_area.close).props('flat color=teal').classes('mt-4')
+                return
+
+            # ==========================================
+            # 手动模式：显示选择界面
             # ==========================================
             content_wrapper.clear()
 
