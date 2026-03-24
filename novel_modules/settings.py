@@ -921,3 +921,136 @@ def create_global_graph_panel():
 
         # 初始加载
         ui.timer(0.1, load_graph, once=True)
+
+
+# ================= 💰 费用管理 UI =================
+
+def refresh_billing_ui():
+    """费用管理界面"""
+    from novel_modules.billing import get_billing_service
+
+    container = ui_refs.get('billing_container')
+    if not container:
+        return
+
+    container.clear()
+
+    billing = get_billing_service()
+
+    with container:
+        # 1. 总览卡片
+        with ui.card().classes('w-full p-4 mb-4 bg-gradient-to-r from-blue-50 to-purple-50'):
+            ui.label('💰 费用总览').classes('text-xl font-bold text-grey-8 mb-4')
+
+            with ui.grid(columns=4).classes('w-full gap-4'):
+                # 余额
+                with ui.card().classes('p-3 bg-white text-center'):
+                    ui.label('账户余额').classes('text-xs text-grey-6 mb-1')
+                    balance_label = ui.label(f'¥{billing.get_balance():.4f}')
+                    balance_label.classes('text-2xl font-bold text-blue-600')
+
+                # 今日花费
+                today_stats = billing.get_today_stats()
+                with ui.card().classes('p-3 bg-white text-center'):
+                    ui.label('今日花费').classes('text-xs text-grey-6 mb-1')
+                    ui.label(f'¥{today_stats["cost"]:.4f}').classes('text-2xl font-bold text-orange-600')
+
+                # 本月花费
+                month_stats = billing.get_month_stats()
+                with ui.card().classes('p-3 bg-white text-center'):
+                    ui.label('本月花费').classes('text-xs text-grey-6 mb-1')
+                    ui.label(f'¥{month_stats["cost"]:.4f}').classes('text-2xl font-bold text-green-600')
+
+                # 总调用次数
+                stats = billing.get_stats()
+                with ui.card().classes('p-3 bg-white text-center'):
+                    ui.label('总调用次数').classes('text-xs text-grey-6 mb-1')
+                    ui.label(f'{stats["total_calls"]}').classes('text-2xl font-bold text-purple-600')
+
+        # 2. 充值与设置
+        with ui.card().classes('w-full p-4 mb-4 bg-yellow-50'):
+            ui.label('⚙️ 账户设置').classes('text-lg font-bold text-yellow-800 mb-2')
+
+            with ui.row().classes('w-full items-center gap-4'):
+                recharge_input = ui.number('充值金额', value=10.0, min=0.1, step=0.1, format='%.2f').classes('w-32')
+
+                def do_recharge():
+                    billing.add_balance(recharge_input.value)
+                    ui.notify(f'已充值 ¥{recharge_input.value:.2f}', type='positive')
+                    refresh_billing_ui()
+
+                ui.button('充值', icon='add', on_click=do_recharge).props('color=green')
+
+                def clear_records():
+                    billing.clear_records()
+                    ui.notify('记录已清空', type='positive')
+                    refresh_billing_ui()
+
+                ui.button('清空记录', icon='delete', on_click=clear_records).props('color=red flat')
+
+        # 3. 趋势图表
+        with ui.card().classes('w-full p-4 mb-4 bg-white'):
+            ui.label('📊 近7天花费趋势').classes('text-lg font-bold text-grey-8 mb-2')
+
+            daily_stats = billing.get_daily_stats(7)
+
+            # 使用简单的柱状图展示
+            with ui.row().classes('w-full items-end gap-2 h-32'):
+                max_cost = max(d['cost'] for d in daily_stats) if daily_stats else 1
+                max_cost = max(max_cost, 0.01)  # 避免除零
+
+                for day in daily_stats:
+                    height = int((day['cost'] / max_cost) * 100)
+                    height = max(height, 5)  # 最小高度 5px
+
+                    with ui.column().classes('items-center gap-1'):
+                        # 柱子
+                        with ui.element('div').classes(f'w-8 bg-blue-400 rounded-t').style(f'height: {height}px'):
+                            pass
+                        # 日期标签
+                        ui.label(day['date'][-5:]).classes('text-xs text-grey-6')
+                        # 金额
+                        ui.label(f'¥{day["cost"]:.3f}').classes('text-xs text-blue-600')
+
+        # 4. 详细记录
+        with ui.card().classes('w-full p-4 bg-white'):
+            with ui.row().classes('w-full justify-between items-center mb-2'):
+                ui.label('📜 调用记录').classes('text-lg font-bold text-grey-8')
+
+                def export_records():
+                    import json
+                    from datetime import datetime
+                    records = billing.get_records()
+                    if not records:
+                        ui.notify('没有记录可导出', type='warning')
+                        return
+
+                    export_data = {
+                        "export_time": datetime.now().isoformat(),
+                        "stats": billing.get_stats(),
+                        "records": records[-100:]  # 最近100条
+                    }
+
+                    # 在浏览器中下载
+                    ui.notify(f'已准备 {len(export_data["records"])} 条记录', type='positive')
+
+                ui.button('导出最近100条', icon='download', on_click=export_records).props('flat size=sm')
+
+            records = billing.get_records()[-20:]  # 显示最近20条
+
+            if not records:
+                ui.label('暂无记录').classes('text-grey-5 italic')
+            else:
+                with ui.column().classes('w-full gap-2'):
+                    for r in reversed(records):  # 最新的在上面
+                        with ui.card().classes('w-full p-2 bg-grey-1'):
+                            with ui.row().classes('w-full justify-between items-center'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.badge(r['task_type'], color='blue').props('dense')
+                                    ui.label(r['model']).classes('text-xs text-grey-6')
+
+                                ui.label(f'¥{r["cost"]:.6f}').classes('font-bold text-red-600')
+
+                            with ui.row().classes('w-full justify-between text-xs text-grey-5 mt-1'):
+                                ui.label(f'{r["book_name"]} | {r["timestamp"][:16]}')
+                                ui.label(f'输入: {r["input_tokens"]} | 输出: {r["output_tokens"]}')

@@ -35,5 +35,15 @@
         "json_only_architect_system": "你是一个只输出JSON的架构师。",
         "inspiration_assistant_system": "你是一个网文灵感助手。请只返回请求的内容，不要废话。"
     },
+    "pricing": {
+        "deepseek-chat": {"input": 0.00194, "output": 0.00792},
+        "deepseek-reasoner": {"input": 0.00396, "output": 0.01577},
+        "gpt-4": {"input": 0.216, "output": 0.432},
+        "gpt-4-turbo": {"input": 0.072, "output": 0.216},
+        "gpt-3.5-turbo": {"input": 0.0036, "output": 0.0108},
+        "claude-3-opus": {"input": 0.108, "output": 0.54},
+        "claude-3-sonnet": {"input": 0.0216, "output": 0.108},
+        "claude-3-haiku": {"input": 0.0018, "output": 0.009}
+    },
     "last_open_book": "test2"
 }

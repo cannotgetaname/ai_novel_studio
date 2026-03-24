@@ -14,6 +14,9 @@ import networkx as nx
 
 import hashlib
 
+# Token 计费模块
+from novel_modules.billing import get_billing_service, record_api_call, estimate_and_record
+
 
 def count_words(text):
     """
@@ -1677,7 +1680,7 @@ def classify_error(error):
     # 其他错误
     return ('UNKNOWN_ERROR', False, f'未知错误 ({error_type}): {error}')
 
-def sync_call_llm(prompt, system_prompt, task_type="writer"):
+def sync_call_llm(prompt, system_prompt, task_type="writer", book_name=None):
     model_name = get_model(task_type)
     temperature = get_temperature(task_type)
     print(f"\n[LLM Router] 任务: {task_type} | 模型: {model_name}")
@@ -1708,6 +1711,33 @@ def sync_call_llm(prompt, system_prompt, task_type="writer"):
             result = response.choices[0].message.content
             if not result:
                 return "Error: API 返回空内容"
+
+            # 【新增】记录 token 使用量
+            try:
+                if hasattr(response, 'usage') and response.usage:
+                    billing = get_billing_service()
+                    # 获取当前书籍名称
+                    if book_name is None:
+                        try:
+                            from novel_modules.state import app_state
+                            book_name = app_state.current_book_name or "Unknown"
+                        except:
+                            book_name = "Unknown"
+
+                    pricing = CFG.get('pricing', {})
+                    billing.record_call(
+                        book_name=book_name,
+                        task_type=task_type,
+                        model=model_name,
+                        input_tokens=response.usage.prompt_tokens,
+                        output_tokens=response.usage.completion_tokens,
+                        cost=0,  # 自动计算
+                        status="success",
+                        config_pricing=pricing
+                    )
+                    print(f"[LLM Router] Token 使用: input={response.usage.prompt_tokens}, output={response.usage.completion_tokens}")
+            except Exception as e:
+                print(f"[Billing] 记录失败: {e}")
 
             print(f"[LLM Router] ✅ 成功，结果长度: {len(result)}")
             return result
@@ -1784,7 +1814,7 @@ async def async_stream_call_llm(prompt, system_prompt, task_type="writer"):
         print(f"LLM异步流式调用失败: {error_msg}")
         yield error_msg
 
-def sync_rewrite_llm(selected_text, context_pre, context_post, instruction):
+def sync_rewrite_llm(selected_text, context_pre, context_post, instruction, book_name=None):
     task_type = "editor"
     model_name = get_model(task_type)
     temperature = get_temperature(task_type)
@@ -1797,7 +1827,33 @@ def sync_rewrite_llm(selected_text, context_pre, context_post, instruction):
             stream=False,
             temperature=temperature
         )
-        return response.choices[0].message.content
+        result = response.choices[0].message.content
+
+        # 记录 token 使用量
+        try:
+            if hasattr(response, 'usage') and response.usage:
+                billing = get_billing_service()
+                if book_name is None:
+                    try:
+                        from novel_modules.state import app_state
+                        book_name = app_state.current_book_name or "Unknown"
+                    except:
+                        book_name = "Unknown"
+                pricing = CFG.get('pricing', {})
+                billing.record_call(
+                    book_name=book_name,
+                    task_type=task_type,
+                    model=model_name,
+                    input_tokens=response.usage.prompt_tokens,
+                    output_tokens=response.usage.completion_tokens,
+                    cost=0,
+                    status="success",
+                    config_pricing=pricing
+                )
+        except Exception as e:
+            print(f"[Billing] 记录失败: {e}")
+
+        return result
     except ValueError as e:
         return f"Error: {str(e)}"
     except Exception as e:
@@ -1856,6 +1912,9 @@ def sync_review_chapter(content, context_str):
             result = response.choices[0].message.content
             if not result:
                 return "Error [PARSE_ERROR]: API 返回空内容"
+
+            # 记录 token 使用量
+            record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
 
             print(f"[审稿] ✅ 成功，报告长度: {len(result)}")
             return result
@@ -1937,6 +1996,9 @@ def sync_analyze_time(content, prev_time_label):
             result = response.choices[0].message.content
             if not result:
                 return "Error [PARSE_ERROR]: API 返回空内容"
+
+            # 记录 token 使用量
+            record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
 
             print(f"[时间分析] ✅ 成功，结果长度: {len(result)}")
             return result
@@ -2024,6 +2086,9 @@ def sync_analyze_state(content, current_data_summary):
             if not result:
                 print("[状态审计] ❌ API 返回空内容")
                 return "Error [PARSE_ERROR]: API 返回空内容"
+
+            # 记录 token 使用量
+            record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
 
             print(f"[状态审计] ✅ 成功，结果长度: {len(result)}")
             return result
@@ -2256,6 +2321,9 @@ def sync_review_section(section_text, section_id, context_str):
             if not result:
                 return {"error": "API返回空内容"}
 
+            # 记录 token 使用量
+            record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
+
             # 解析 JSON
             import re
             clean = result.replace("```json", "").replace("```", "").strip()
@@ -2438,6 +2506,9 @@ def sync_rewrite_section(section_text, instruction, context_str):
             result = response.choices[0].message.content
             if not result:
                 return None, "API返回空内容"
+
+            # 记录 token 使用量
+            record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
 
             print(f"[段落重绘] 完成 | 结果长度: {len(result)}")
             return result.strip(), None
@@ -2649,6 +2720,9 @@ def sync_review_chapter_by_paragraphs(paragraphs, context_str):
             if not result:
                 return {"error": "API返回空内容"}
 
+            # 记录 token 使用量
+            record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
+
             # 解析 JSON
             clean = result.replace("```json", "").replace("```", "").strip()
             start, end = clean.find('{'), clean.rfind('}')
@@ -2792,6 +2866,9 @@ def sync_rewrite_paragraph(paragraph_text, issues, context_str):
             if not result:
                 return None, "API返回空内容"
 
+            # 记录 token 使用量
+            record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
+
             result = result.strip()
 
             # 检查字数是否严重超标（超过800字的1.5倍才截断）
@@ -2898,6 +2975,9 @@ def sync_review_character_consistency(paragraphs, characters_info):
 
         result = response.choices[0].message.content if response.choices else ""
 
+        # 记录 token 使用量
+        record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
+
         # 解析JSON
         clean = result.replace("```json", "").replace("```", "").strip()
         start, end = clean.find('{'), clean.rfind('}')
@@ -3000,6 +3080,9 @@ def sync_review_plot_logic(paragraphs, world_setting, chapter_outline):
 
         result = response.choices[0].message.content if response.choices else ""
 
+        # 记录 token 使用量
+        record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
+
         clean = result.replace("```json", "").replace("```", "").strip()
         start, end = clean.find('{'), clean.rfind('}')
         if start >= 0 and end > start:
@@ -3094,6 +3177,9 @@ def sync_review_pacing(paragraphs):
         )
 
         result = response.choices[0].message.content if response.choices else ""
+
+        # 记录 token 使用量
+        record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
 
         clean = result.replace("```json", "").replace("```", "").strip()
         start, end = clean.find('{'), clean.rfind('}')

@@ -2,6 +2,13 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# 清除代理设置，避免网络问题
+os.environ['NO_PROXY'] = '*'
+os.environ['no_proxy'] = '*'
+for env_var in ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'all_proxy']:
+    if env_var in os.environ:
+        del os.environ[env_var]
+
 from nicegui import ui, run
 import backend
 from novel_modules.state import app_state, ui_refs, manager
@@ -211,6 +218,7 @@ async def main_page():
             t_graph = ui.tab('图谱', icon='hub')
             tab_arch = ui.tab('架构', icon='construction')
             tab_timeline = ui.tab('时间轴', icon='schedule')
+            tab_sys = ui.tab('系统设置', icon='settings')
 
         # 4.3.2 Tab Panels (占据剩余所有高度)
         # flex-grow: 占据剩余空间
@@ -223,14 +231,12 @@ async def main_page():
 
             # --- Tab 2: 设定 ---
             with ui.tab_panel(tab_setting).classes('h-full w-full p-0 flex flex-col'):
-                # 二级 Tabs
+                # 二级 Tabs（书籍相关设定）
                 with ui.tabs().classes('w-full bg-grey-2 shrink-0') as set_tabs:
                     t_world = ui.tab('世界观')
                     t_char = ui.tab('人物')
                     t_item = ui.tab('物品')
                     t_loc = ui.tab('地点')
-                    t_api = ui.tab('API与模型')
-                    t_prompts = ui.tab('提示词管理')
 
                 # 二级 Tab Panels
                 with ui.tab_panels(set_tabs, value=t_world).classes('w-full flex-grow h-0'):
@@ -271,10 +277,37 @@ async def main_page():
                             # flex-grow: 占据剩余所有宽度
                             # h-full: 占满高度
                             with ui.card().classes('flex-grow h-full p-0 rounded-none border-none'):
-                                world_editor = ui.codemirror(value=app_state.settings['world_view'], language='markdown') \
-                                    .classes('w-full h-full text-base font-sans') \
-                                    .style('font-family: system-ui, -apple-system, sans-serif !important;') \
-                                    .props('options="{lineWrapping: true, lineNumbers: false}" borderless')
+                                # 编辑/预览切换
+                                with ui.row().classes('w-full bg-grey-100 shrink-0 p-1'):
+                                    edit_btn = ui.button('📝 编辑', on_click=lambda: switch_view('edit')).props('flat no-caps color=primary size=sm')
+                                    preview_btn = ui.button('👁️ 预览', on_click=lambda: switch_view('preview')).props('flat no-caps color=grey size=sm')
+
+                                # 编辑器面板
+                                with ui.column().classes('w-full h-full') as edit_panel:
+                                    world_editor = ui.codemirror(value=app_state.settings['world_view'], language='markdown') \
+                                        .classes('w-full h-full text-base font-sans') \
+                                        .style('font-family: system-ui, -apple-system, sans-serif !important;') \
+                                        .props('options="{lineWrapping: true, lineNumbers: true}" borderless')
+
+                                # 预览面板
+                                with ui.column().classes('w-full h-full hidden p-4 bg-white overflow-auto') as preview_panel:
+                                    world_preview = ui.markdown(app_state.settings['world_view']).classes('prose max-w-none')
+
+                                # 实时更新预览
+                                world_editor.on('input', lambda e: setattr(world_preview, 'content', e.value))
+
+                                def switch_view(mode):
+                                    if mode == 'edit':
+                                        edit_panel.classes(remove='hidden')
+                                        preview_panel.classes(add='hidden')
+                                        edit_btn.props('color=primary')
+                                        preview_btn.props('color=grey')
+                                    else:
+                                        edit_panel.classes(add='hidden')
+                                        preview_panel.classes(remove='hidden')
+                                        edit_btn.props('color=grey')
+                                        preview_btn.props('color=primary')
+                                        world_preview.content = world_editor.value
                     
                     # 2.2 人物
                     with ui.tab_panel(t_char).classes('h-full w-full p-2 flex flex-col'):
@@ -321,23 +354,11 @@ async def main_page():
                         with ui.element('div').classes('w-full flex-grow relative border'):
                             with ui.scroll_area().classes('w-full h-full').bind_visibility_from(ui_refs['loc_view_mode'], 'text', backward=lambda x: x == 'list'):
                                 ui_refs['loc_container'] = ui.column().classes('w-full p-1')
-                            
+
                             with ui.element('div').classes('w-full h-full').bind_visibility_from(ui_refs['loc_view_mode'], 'text', backward=lambda x: x == 'graph'):
                                 ui_refs['loc_graph_container'] = ui.column().classes('w-full h-full')
                             settings.refresh_loc_ui()
-                    
-                    # 2.5 API与模型
-                    with ui.tab_panel(t_api).classes('h-full w-full p-2 flex flex-col'):
-                        with ui.scroll_area().classes('w-full flex-grow'):
-                            ui_refs['api_container'] = ui.column().classes('w-full')
-                            settings.refresh_api_ui()
 
-                    # 2.6 提示词管理
-                    with ui.tab_panel(t_prompts).classes('h-full w-full p-2 flex flex-col'):
-                        with ui.scroll_area().classes('w-full flex-grow'):
-                            ui_refs['prompts_container'] = ui.column().classes('w-full')
-                            settings.refresh_prompts_ui()
-            
             # --- Tab 3: 图谱 ---
             with ui.tab_panel(t_graph).classes('h-full w-full p-0 flex flex-col'):
                 settings.create_global_graph_panel()
@@ -354,6 +375,35 @@ async def main_page():
                 with ui.scroll_area().classes('w-full flex-grow bg-grey-1 p-4 rounded'):
                     ui_refs['timeline_container'] = ui.column().classes('w-full')
                     timeline.refresh_timeline()
+
+            # --- Tab 6: 系统设置 ---
+            with ui.tab_panel(tab_sys).classes('h-full w-full p-0 flex flex-col'):
+                # 二级 Tabs（全局系统设置）
+                with ui.tabs().classes('w-full bg-grey-2 shrink-0') as sys_tabs:
+                    t_api = ui.tab('API与模型')
+                    t_prompts = ui.tab('提示词管理')
+                    t_billing = ui.tab('费用管理')
+
+                # 二级 Tab Panels
+                with ui.tab_panels(sys_tabs, value=t_api).classes('w-full flex-grow h-0'):
+
+                    # 6.1 API与模型
+                    with ui.tab_panel(t_api).classes('h-full w-full p-2 flex flex-col'):
+                        with ui.scroll_area().classes('w-full flex-grow'):
+                            ui_refs['api_container'] = ui.column().classes('w-full')
+                            settings.refresh_api_ui()
+
+                    # 6.2 提示词管理
+                    with ui.tab_panel(t_prompts).classes('h-full w-full p-2 flex flex-col'):
+                        with ui.scroll_area().classes('w-full flex-grow'):
+                            ui_refs['prompts_container'] = ui.column().classes('w-full')
+                            settings.refresh_prompts_ui()
+
+                    # 6.3 费用管理
+                    with ui.tab_panel(t_billing).classes('h-full w-full p-2 flex flex-col'):
+                        with ui.scroll_area().classes('w-full flex-grow'):
+                            ui_refs['billing_container'] = ui.column().classes('w-full')
+                            settings.refresh_billing_ui()
 
     # 启动加载
     await writing.load_chapter(0)

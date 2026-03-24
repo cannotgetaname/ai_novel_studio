@@ -204,5 +204,7 @@ ui_refs = {
     'save_status': None, 'config_container': None,
     # 【新增】地点视图控制
     'loc_view_mode': None,
-    'loc_graph_container': None
+    'loc_graph_container': None,
+    # 【新增】费用管理
+    'billing_container': None
 }
