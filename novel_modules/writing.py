@@ -53,6 +53,11 @@ async def perform_auto_save():
     await run.io_bound(manager.save_chapter_paragraphs, chapter['id'], paragraphs)
     await run.io_bound(manager.save_structure, app_state.structure)
 
+    # 记录写作进度（自动保存时也记录字数）
+    from novel_modules.goals import record_writing_progress
+    word_count = backend.count_words(content)['total_words']
+    record_writing_progress(words=word_count, book_name=app_state.current_book_name)
+
     save_status_ref = ui_refs.get('save_status')
     if save_status_ref:
         now_str = datetime.now().strftime("%H:%M:%S")
@@ -601,6 +606,12 @@ async def save_current_chapter():
     await run.io_bound(memory.add_chapter_memory, chapter['id'], new_content)
     print("[完整保存] RAG记忆库已更新")
 
+    # 【新增】记录写作进度
+    from novel_modules.goals import record_writing_progress
+    word_count = backend.count_words(new_content)['total_words']
+    record_writing_progress(words=word_count, chapters=1, book_name=app_state.current_book_name)
+    print(f"[完整保存] 写作进度已记录: {word_count} 字")
+
     ui.notify('✅ 保存成功！记忆库已更新。', type='positive')
     save_status_ref = ui_refs.get('save_status')
     if save_status_ref: save_status_ref.set_text("✅ 已完整保存")
@@ -939,15 +950,33 @@ async def open_review_dialog():
             characters_info += f"  关系: {', '.join(rel_strs)}\n"
 
     world_setting = app_state.settings.get('world_view', '')
+    book_summary = app_state.settings.get('book_summary', '')
+
+    # 获取前一章内容用于风格对比
+    prev_content = ''
+    prev_summary = ''
+    if chapter_id > 1:
+        prev_chapter = next((c for c in app_state.structure if c['id'] == chapter_id - 1), None)
+        if prev_chapter:
+            prev_summary = prev_chapter.get('summary', '')
+            try:
+                prev_paragraphs = await run.io_bound(manager.load_chapter_paragraphs, chapter_id - 1)
+                if prev_paragraphs:
+                    prev_content = '\n'.join([p['text'] for p in prev_paragraphs[:5]])  # 取前5段
+            except:
+                pass
 
     context_info = {
         "characters": characters_info,
         "world_setting": world_setting,
-        "chapter_outline": chapter_outline
+        "chapter_outline": chapter_outline,
+        "book_summary": book_summary,
+        "prev_summary": prev_summary,
+        "prev_content": prev_content
     }
 
     with ui.dialog() as dialog, ui.card().classes('w-[900px] max-h-[90vh]'):
-        ui.label('📋 多维度审稿').classes('text-h6 mb-2')
+        ui.label('多维度审稿与分析').classes('text-h6 mb-2')
 
         # 进度显示
         status_label = ui.label('正在加载段落结构...').classes('text-sm text-grey-6 mb-2')
@@ -1006,7 +1035,7 @@ async def open_review_dialog():
 
                 with ui.card().classes('w-full bg-blue-50 mb-4 p-3'):
                     with ui.row().classes('items-center gap-4'):
-                        ui.label(f'📊 综合评分: {overall}/10').classes('text-xl font-bold')
+                        ui.label(f'综合评分: {overall}/10').classes('text-xl font-bold')
                         ui.label(f'|').classes('text-grey-4')
                         ui.label(f'严重: {stats.get("severe", 0)}').classes('text-red-600')
                         ui.label(f'中等: {stats.get("medium", 0)}').classes('text-orange-600')
@@ -1020,12 +1049,72 @@ async def open_review_dialog():
                         issues_by_dimension[dim] = []
                     issues_by_dimension[dim].append(issue)
 
-                for dim in ['人设', '逻辑', '节奏']:
+                # 显示分析数据
+                analysis_data = result.get('analysis_data', {})
+
+                # 情感曲线
+                emotion_curve = analysis_data.get('emotion_curve', [])
+                if emotion_curve:
+                    with ui.expansion("情感曲线", icon='show_chart').classes('w-full mb-2 bg-purple-50'):
+                        with ui.column().classes('w-full p-2'):
+                            # 简单的曲线可视化
+                            with ui.row().classes('w-full items-end gap-1 h-16'):
+                                for point in emotion_curve[:20]:  # 最多显示20个点
+                                    intensity = point.get('intensity', 5)
+                                    emotion = point.get('emotion', '')
+                                    height = int(intensity * 8)
+                                    # 根据情绪类型着色
+                                    color = 'red' if emotion in ['紧张', '愤怒', '恐惧'] else \
+                                            'blue' if emotion in ['悲伤', '压抑', '忧郁'] else \
+                                            'green' if emotion in ['喜悦', '轻松', '温暖'] else 'grey'
+                                    with ui.column().classes('items-center'):
+                                        with ui.element('div').classes(f'w-4 bg-{color}-400 rounded-t').style(f'height: {height}px'):
+                                            pass
+                            if analysis_data.get('emotion_analysis'):
+                                ui.label(f"分析: {analysis_data['emotion_analysis']}").classes('text-sm text-grey-6 mt-2')
+
+                # 叙事统计
+                narrative_stats = analysis_data.get('narrative_stats', {})
+                if narrative_stats:
+                    with ui.expansion("叙事分析", icon='bar_chart').classes('w-full mb-2 bg-blue-50'):
+                        with ui.column().classes('w-full p-2'):
+                            ui.label(f"对话段落: {narrative_stats.get('dialogue_count', 0)}").classes('text-sm')
+                            ui.label(f"描写段落: {narrative_stats.get('description_count', 0)}").classes('text-sm')
+                            ui.label(f"对话占比: {narrative_stats.get('dialogue_ratio', '未知')}").classes('text-sm')
+
+                # 伏笔追踪
+                foreshadowing = analysis_data.get('foreshadowing', {})
+                if foreshadowing:
+                    with ui.expansion("伏笔追踪", icon='track_changes').classes('w-full mb-2 bg-green-50'):
+                        with ui.column().classes('w-full p-2'):
+                            new_foreshadows = foreshadowing.get('new', [])
+                            if new_foreshadows:
+                                ui.label("本章新埋伏笔:").classes('text-sm font-bold text-green-700')
+                                for f in new_foreshadows[:5]:
+                                    ui.label(f"  • [{f.get('paragraph_id', '?')}] {f.get('content', '')[:30]}").classes('text-xs')
+                            resolved = foreshadowing.get('resolved', [])
+                            if resolved:
+                                ui.label("已回收伏笔:").classes('text-sm font-bold text-blue-700 mt-2')
+                                for f in resolved[:5]:
+                                    ui.label(f"  • {f.get('content', '')[:30]}").classes('text-xs')
+
+                # 风格分析
+                style_analysis = analysis_data.get('style_analysis', {})
+                if style_analysis:
+                    with ui.expansion("风格分析", icon='brush').classes('w-full mb-2 bg-amber-50'):
+                        with ui.column().classes('w-full p-2'):
+                            ui.label(f"主要风格: {style_analysis.get('dominant_style', '未知')}").classes('text-sm')
+                            ui.label(f"句式特点: {style_analysis.get('sentence_pattern', '未知')}").classes('text-sm')
+                            ui.label(f"用词水平: {style_analysis.get('vocabulary_level', '未知')}").classes('text-sm')
+
+                # 显示各维度问题
+                dimension_order = ['人设', '逻辑', '节奏', '情感', '叙事', '伏笔', '风格']
+                for dim in dimension_order:
                     dim_issues = issues_by_dimension.get(dim, [])
                     if not dim_issues:
                         continue
 
-                    with ui.expansion(f"🔍 {dim}问题 ({len(dim_issues)}个)", icon='warning') \
+                    with ui.expansion(f"{dim}问题 ({len(dim_issues)}个)", icon='warning') \
                             .classes('w-full mb-2'):
                         with ui.column().classes('w-full gap-2'):
 
@@ -1428,16 +1517,16 @@ def create_writing_tab():
                 
                 with ui.row().classes('items-center'):
                     ui.button('🚀 生成', on_click=generate_content).props('color=primary')
-                    ui.button('💾 保存', on_click=save_current_chapter).props('color=green').tooltip('完整保存：更新记忆库和摘要')
+                    ui.button('保存', on_click=save_current_chapter).props('color=green').tooltip('完整保存：更新记忆库和摘要')
                     # 【新增】撤销重做按钮
-                    ui.button('↩️ 撤销', on_click=undo_action).props('color=grey outline').tooltip('撤销上一步操作')
-                    ui.button('↪️ 重做', on_click=redo_action).props('color=grey outline').tooltip('重做上一步撤销的操作')
+                    ui.button('撤销', on_click=undo_action).props('color=grey outline').tooltip('撤销上一步操作')
+                    ui.button('重做', on_click=redo_action).props('color=grey outline').tooltip('重做上一步撤销的操作')
                     # 【原有】历史按钮
-                    ui.button('🕰️ 历史', on_click=open_history_dialog).props('color=grey outline').tooltip('查看历史版本快照')
-                    ui.button('🌍 结算', on_click=open_state_audit_dialog).props('color=blue outline')
-                    ui.button('✨ 重绘', on_click=open_rewrite_dialog).props('color=purple outline').tooltip('选中文字后重写')
-                    ui.button('📝 分段重绘', on_click=open_section_rewrite_dialog).props('color=deep-purple outline').tooltip('按审稿意见分段重写')
-                    ui.button('🔍 审稿', on_click=open_review_dialog).props('color=orange outline')
+                    ui.button('历史', on_click=open_history_dialog).props('color=grey outline').tooltip('查看历史版本快照')
+                    ui.button('结算', on_click=open_state_audit_dialog).props('color=blue outline')
+                    ui.button('重绘', on_click=open_rewrite_dialog).props('color=purple outline').tooltip('选中文字后重写')
+                    ui.button('分段重绘', on_click=open_section_rewrite_dialog).props('color=deep-purple outline').tooltip('按审稿意见分段重写')
+                    ui.button('审稿', on_click=open_review_dialog).props('color=orange outline')
                     
                     with ui.column().classes('ml-4 gap-0'):
                         ui_refs['char_count'] = ui.label('字数: 0').classes('text-grey-7 text-xs')

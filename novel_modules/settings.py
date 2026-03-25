@@ -1054,3 +1054,174 @@ def refresh_billing_ui():
                             with ui.row().classes('w-full justify-between text-xs text-grey-5 mt-1'):
                                 ui.label(f'{r["book_name"]} | {r["timestamp"][:16]}')
                                 ui.label(f'输入: {r["input_tokens"]} | 输出: {r["output_tokens"]}')
+
+
+# ================= 🎯 写作目标 UI =================
+
+def refresh_goals_ui():
+    """写作目标管理界面"""
+    from novel_modules.goals import get_goals_service
+
+    container = ui_refs.get('goals_container')
+    if not container:
+        return
+
+    container.clear()
+
+    goals_service = get_goals_service()
+
+    with container:
+        # 1. 概览卡片
+        with ui.card().classes('w-full p-4 mb-4 bg-gradient-to-r from-green-50 to-teal-50'):
+            ui.label('写作目标').classes('text-xl font-bold text-grey-8 mb-4')
+
+            with ui.grid(columns=4).classes('w-full gap-4'):
+                # 今日进度
+                today = goals_service.get_today_progress()
+                with ui.card().classes('p-3 bg-white text-center'):
+                    ui.label('今日写作').classes('text-xs text-grey-6 mb-1')
+                    ui.label(f'{today["words"]} 字').classes('text-2xl font-bold text-green-600')
+
+                # 连续天数
+                streak = goals_service.get_streak()
+                with ui.card().classes('p-3 bg-white text-center'):
+                    ui.label('连续写作').classes('text-xs text-grey-6 mb-1')
+                    ui.label(f'{streak["current"]} 天').classes('text-2xl font-bold text-orange-500')
+                    if streak["best"] > 0:
+                        ui.label(f'最佳: {streak["best"]}天').classes('text-xs text-grey-5')
+
+                # 本周统计
+                week = goals_service.get_week_stats()
+                with ui.card().classes('p-3 bg-white text-center'):
+                    ui.label('本周写作').classes('text-xs text-grey-6 mb-1')
+                    ui.label(f'{week["words"]} 字').classes('text-2xl font-bold text-blue-600')
+
+                # 本月统计
+                month = goals_service.get_month_stats()
+                with ui.card().classes('p-3 bg-white text-center'):
+                    ui.label('本月写作').classes('text-xs text-grey-6 mb-1')
+                    ui.label(f'{month["words"]} 字').classes('text-2xl font-bold text-purple-600')
+
+        # 2. 活跃目标列表
+        with ui.card().classes('w-full p-4 mb-4 bg-white'):
+            with ui.row().classes('w-full justify-between items-center mb-3'):
+                ui.label('我的目标').classes('text-lg font-bold text-grey-8')
+                ui.button('新建目标', on_click=lambda: open_goal_dialog()).props('color=primary size=sm icon=add')
+
+            active_goals = goals_service.get_active_goals()
+
+            if not active_goals:
+                with ui.column().classes('w-full items-center py-8'):
+                    ui.icon('flag', size='xl', color='grey-4')
+                    ui.label('暂无目标，点击上方按钮创建').classes('text-grey-5 mt-2')
+            else:
+                with ui.column().classes('w-full gap-3'):
+                    for goal in active_goals:
+                        with ui.card().classes('w-full p-3 bg-grey-1'):
+                            with ui.row().classes('w-full justify-between items-center mb-2'):
+                                ui.label(goal['title']).classes('font-bold')
+
+                                with ui.row().classes('items-center gap-1'):
+                                    # 目标类型标签
+                                    type_labels = {'daily': '每日', 'weekly': '每周', 'monthly': '每月'}
+                                    type_colors = {'daily': 'blue', 'weekly': 'green', 'monthly': 'purple'}
+                                    ui.badge(type_labels.get(goal['type'], goal['type']), color=type_colors.get(goal['type'], 'grey')).props('dense')
+
+                                    # 状态标签
+                                    if goal['status'] == 'completed':
+                                        ui.badge('已完成', color='positive').props('dense')
+
+                                    # 操作按钮
+                                    ui.button(icon='delete', on_click=lambda g=goal: delete_goal(g['id'])).props('flat dense size=sm color=red')
+
+                            # 进度条
+                            progress = min(goal['current_value'] / goal['target_value'], 1.0) if goal['target_value'] > 0 else 0
+                            with ui.row().classes('w-full items-center gap-2'):
+                                ui.linear_progress(value=progress, color='green' if progress >= 1 else 'blue').classes('flex-grow')
+                                ui.label(f'{goal["current_value"]}/{goal["target_value"]} {goal["unit"]}').classes('text-xs text-grey-6')
+
+                            # 日期范围
+                            ui.label(f'📅 {goal["start_date"]} ~ {goal["end_date"]}').classes('text-xs text-grey-5 mt-1')
+
+        # 3. 最近写作记录
+        with ui.card().classes('w-full p-4 bg-white'):
+            ui.label('最近7天记录').classes('text-lg font-bold text-grey-8 mb-3')
+
+            history = goals_service.get_recent_history(7)
+
+            if not history:
+                ui.label('暂无记录').classes('text-grey-5 italic')
+            else:
+                with ui.row().classes('w-full items-end gap-2 h-24'):
+                    # 找出最大值
+                    max_words = max(h['words'] for h in history) if history else 1
+                    max_words = max(max_words, 100)  # 最小刻度
+
+                    for record in history:
+                        height = int((record['words'] / max_words) * 80) if record['words'] > 0 else 2
+                        height = max(height, 2)
+
+                        with ui.column().classes('items-center gap-1'):
+                            # 柱子
+                            with ui.element('div').classes(f'w-6 bg-green-400 rounded-t').style(f'height: {height}px'):
+                                pass
+                            # 日期
+                            ui.label(record['date'][-5:]).classes('text-xs text-grey-6')
+                            # 字数
+                            ui.label(f'{record["words"]}').classes('text-xs text-green-600')
+
+
+def open_goal_dialog(goal=None):
+    """新建/编辑目标对话框"""
+    from novel_modules.goals import get_goals_service
+
+    goals_service = get_goals_service()
+    is_edit = goal is not None
+
+    with ui.dialog() as dialog, ui.card().classes('w-96'):
+        ui.label('新建目标' if not is_edit else '编辑目标').classes('text-h6 mb-4')
+
+        title_input = ui.input('目标标题', value=goal['title'] if is_edit else '').classes('w-full')
+
+        with ui.row().classes('w-full gap-2'):
+            type_select = ui.select(
+                {'daily': '每日', 'weekly': '每周', 'monthly': '每月'},
+                label='目标类型',
+                value=goal['type'] if is_edit else 'daily'
+            ).classes('flex-grow')
+
+        with ui.row().classes('w-full gap-2'):
+            target_input = ui.number('目标值', value=goal['target_value'] if is_edit else 2000, min=1).classes('w-32')
+            unit_select = ui.select(['字', '章'], label='单位', value=goal['unit'] if is_edit else '字').classes('w-24')
+
+        async def do_save():
+            if not title_input.value:
+                ui.notify('请输入标题', type='warning')
+                return
+
+            if is_edit:
+                goals_service.update_goal(goal['id'], title=title_input.value, type=type_select.value,
+                                         target_value=int(target_input.value), unit=unit_select.value)
+            else:
+                goals_service.create_goal(title=title_input.value, goal_type=type_select.value,
+                                         target_value=int(target_input.value), unit=unit_select.value)
+
+            ui.notify('已保存', type='positive')
+            dialog.close()
+            refresh_goals_ui()
+
+        with ui.row().classes('w-full justify-end mt-4 gap-2'):
+            ui.button('取消', on_click=dialog.close).props('flat')
+            ui.button('保存', on_click=do_save).props('color=primary')
+
+    dialog.open()
+
+
+def delete_goal(goal_id):
+    """删除目标"""
+    from novel_modules.goals import get_goals_service
+
+    goals_service = get_goals_service()
+    goals_service.delete_goal(goal_id)
+    ui.notify('已删除', type='info')
+    refresh_goals_ui()

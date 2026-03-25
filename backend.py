@@ -15,7 +15,7 @@ import networkx as nx
 import hashlib
 
 # Token 计费模块
-from novel_modules.billing import get_billing_service, record_api_call, estimate_and_record
+from novel_modules.billing import get_billing_service, record_api_call, estimate_and_record, record_tokens
 
 
 def count_words(text):
@@ -615,10 +615,38 @@ class NovelManager:
 
     def _init_fs(self):
         if not os.path.exists(self.chapters_dir): os.makedirs(self.chapters_dir)
-        
+
         if not os.path.exists(self.setting_file):
+            # 新增结构化世界观数据
+            default_world_view_structured = {
+                "basic_info": {
+                    "genre": "",        # 题材类型
+                    "era": "",          # 时代背景
+                    "tech_level": ""    # 科技水平
+                },
+                "core_settings": {
+                    "power_system": "",     # 力量体系
+                    "social_structure": "", # 社会结构
+                    "special_rules": ""     # 特殊规则
+                },
+                "key_elements": {
+                    "important_items": "",  # 重要物品
+                    "organizations": "",    # 势力组织
+                    "locations": ""         # 主要地点
+                },
+                "background": {
+                    "history": "",          # 历史背景
+                    "main_conflict": "",    # 主要矛盾
+                    "development": ""       # 发展趋势
+                }
+            }
             with open(self.setting_file, 'w', encoding='utf-8') as f:
-                json.dump({"world_view": "", "characters": "", "book_summary": ""}, f, ensure_ascii=False, indent=4)
+                json.dump({
+                    "world_view": "",
+                    "world_view_structured": default_world_view_structured,
+                    "characters": "",
+                    "book_summary": ""
+                }, f, ensure_ascii=False, indent=4)
         
         if not os.path.exists(self.char_file):
             default_chars = [{
@@ -655,9 +683,28 @@ class NovelManager:
     def load_settings(self):
         try:
             with open(self.setting_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+                # 自动迁移：添加缺失的结构化世界观数据
+                if 'world_view_structured' not in data:
+                    data['world_view_structured'] = {
+                        "basic_info": {"genre": "", "era": "", "tech_level": ""},
+                        "core_settings": {"power_system": "", "social_structure": "", "special_rules": ""},
+                        "key_elements": {"important_items": "", "organizations": "", "locations": ""},
+                        "background": {"history": "", "main_conflict": "", "development": ""}
+                    }
+                return data
         except (FileNotFoundError, json.JSONDecodeError, PermissionError):
-            return {}
+            return {
+                "world_view": "",
+                "world_view_structured": {
+                    "basic_info": {"genre": "", "era": "", "tech_level": ""},
+                    "core_settings": {"power_system": "", "social_structure": "", "special_rules": ""},
+                    "key_elements": {"important_items": "", "organizations": "", "locations": ""},
+                    "background": {"history": "", "main_conflict": "", "development": ""}
+                },
+                "characters": "",
+                "book_summary": ""
+            }
 
     def save_settings(self, data):
         with open(self.setting_file, 'w', encoding='utf-8') as f:
@@ -1386,6 +1433,7 @@ class NovelManager:
         except Exception as e:
             print(f"[灵感生成] Exception: {str(e)}")
             return f"生成失败: {str(e)}"
+
     # --- 大纲树 (Blueprint) 管理 ---
     def load_outline_tree(self):
         path = os.path.join(self.root_dir, "outline_tree.json")
@@ -1393,18 +1441,19 @@ class NovelManager:
             # 初始化根节点，读取现有的 book_summary
             settings = self.load_settings()
             root = {
-                "id": "root", "type": "book", "label": "全书总纲", 
-                "desc": settings.get('book_summary', '在此输入核心灵感...'), 
+                "id": "root", "type": "book", "label": "全书总纲",
+                "desc": settings.get('book_summary', '在此输入核心灵感...'),
                 "children": []
             }
             return [root]
-        with open(path, 'r', encoding='utf-8') as f: return json.load(f)
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
 
     def save_outline_tree(self, data):
         with open(os.path.join(self.root_dir, "outline_tree.json"), 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
 
-    # --- 核心：AI 裂变推演 ---
+    # --- AI 裂变推演 ---
     def ai_fractal_expand(self, node_data, context_summary):
         """
         分形裂变：
@@ -1413,7 +1462,7 @@ class NovelManager:
         """
         node_type = node_data.get('type', 'book')
         current_desc = node_data.get('desc', '')
-        
+
         # 1. 构造 Prompt
         if node_type == 'book':
             target_type = 'volume'
@@ -1427,9 +1476,9 @@ class NovelManager:
         sys_prompt = get_prompt('architect_system')
         prompt += "\n【格式要求】严格返回JSON列表：[{'label': '标题', 'desc': '详细细纲'}, ...]"
 
-        # 2. 调用 LLM (复用 sync_call_llm)
+        # 2. 调用 LLM
         res = sync_call_llm(prompt, sys_prompt, task_type="architect")
-        
+
         # 3. 解析结果
         import uuid
         try:
@@ -1442,48 +1491,45 @@ class NovelManager:
                     "type": target_type,
                     "label": item['label'],
                     "desc": item['desc'],
-                    "linked_id": None, # 初始未同步
+                    "linked_id": None,
                     "children": []
                 })
             return new_nodes
         except Exception as e:
             return f"Error: {e} \nRaw: {res}"
 
-    # --- 核心：同步到正式目录 (The Bridge) ---
+    # --- 同步到正式目录 ---
     def sync_node_to_project(self, node):
         """将蓝图节点转换为正式的分卷或章节"""
-        if node['linked_id']: return "已同步过，跳过创建"
-        
+        if node['linked_id']:
+            return "已同步过，跳过创建"
+
         import uuid
-        
+
         # 1. 同步分卷
         if node['type'] == 'volume':
             volumes = self.load_volumes()
             new_vol_id = f"vol_{str(uuid.uuid4())[:8]}"
             new_vol = {
-                "id": new_vol_id, 
-                "title": node['label'], 
+                "id": new_vol_id,
+                "title": node['label'],
                 "order": len(volumes) + 1
             }
             volumes.append(new_vol)
             self.save_volumes(volumes)
             node['linked_id'] = new_vol_id
-            return f"✅ 分卷 '{node['label']}' 已创建"
+            return f"分卷 '{node['label']}' 已创建"
 
         # 2. 同步章节
         elif node['type'] == 'chapter':
-            # 必须找到父级分卷 ID
-            # 注意：这需要前端传参或者在树结构里向上查找，这里简化处理，假设前端传来 parent_vol_id
-            # 实际实现建议在前端调用时，把父节点的 linked_id 传进来
-            pass 
-            # (具体实现在下面的 UI 部分完善)
+            # 需要前端传参父节点的 linked_id
+            pass
+
     # --- 为 Architect UI 提供树状结构数据 ---
     def get_novel_tree(self, app_state):
-        """
-        将扁平的 volumes 和 structure 组装成 ui.tree 需要的嵌套格式
-        """
+        """将扁平的 volumes 和 structure 组装成 ui.tree 需要的嵌套格式"""
         tree = []
-        
+
         # 1. 根节点
         root_node = {
             'id': 'root',
@@ -1491,20 +1537,17 @@ class NovelManager:
             'icon': 'menu_book',
             'children': []
         }
-        
+
         # 2. 构建分卷
-        # 假设 app_state.volumes 是列表 [{'id': 1, 'title': '...'}, ...]
-        # 假设 app_state.structure 是列表 [{'id': 1, 'volume_id': 1, 'title': '...'}, ...]
-        
         for vol in app_state.volumes:
             vol_node = {
-                'id': f"vol_{vol['id']}", # 加上前缀防止ID冲突
+                'id': f"vol_{vol['id']}",
                 'label': vol['title'],
                 'icon': 'inventory_2',
                 'children': [],
-                '_raw': vol # 暂存原始数据方便后续获取
+                '_raw': vol
             }
-            
+
             # 3. 构建该卷下的章节
             vol_chapters = [c for c in app_state.structure if str(c.get('volume_id')) == str(vol['id'])]
             for chap in vol_chapters:
@@ -1515,83 +1558,161 @@ class NovelManager:
                     '_raw': chap
                 }
                 vol_node['children'].append(chap_node)
-            
+
             root_node['children'].append(vol_node)
-            
+
         tree.append(root_node)
         return tree
 
-    # --- 获取节点上下文 (用于右侧面板渲染) ---
+    # --- 获取节点上下文 ---
     def get_node_context(self, node_id, app_state):
-        """
-        返回: (node_type, context_dict, raw_data)
-        """
-        # 定义默认的安全返回 (兜底策略)
+        """返回: (node_type, context_dict, raw_data)"""
         safe_ctx = {
             'self_info': '暂无详细信息 (可能是未同步的节点或数据已变更)',
             'parent_info': None
         }
-        
+
         try:
             settings = self.load_settings()
-            
-            # === Case 1: 根节点 ===
+
+            # Case 1: 根节点
             if node_id == 'root':
                 ctx = {
                     'self_info': settings.get('book_summary', '暂无全书简介'),
                     'parent_info': None
                 }
                 return 'root', ctx, {'title': '全书总纲'}
-                
-            # === Case 2: 分卷节点 ===
-            if str(node_id).startswith('vol_'):
-                # 【修复】只替换第一个 'vol_'，或者直接用切片
-                # 错误写法: real_id = node_id.replace('vol_', '') 
-                # 正确写法: 
-                real_id = node_id.replace('vol_', '', 1) 
-                
-                # 或者更稳妥的切片写法 (因为前缀固定长度是4)
-                # real_id = node_id[4:] 
 
-                # 查找分卷数据
+            # Case 2: 分卷节点
+            if str(node_id).startswith('vol_'):
+                real_id = node_id.replace('vol_', '', 1)
                 vol_data = next((v for v in app_state.volumes if str(v['id']) == str(real_id)), None)
-                
-                if not vol_data: 
+
+                if not vol_data:
                     return 'unknown', safe_ctx, {}
-                
+
                 ctx = {
                     'self_info': vol_data.get('desc', '（该分卷暂无详细描述）'),
                     'parent_info': f"**全书目标**：\n{settings.get('book_summary', '')[:100]}..."
                 }
                 return 'volume', ctx, vol_data
-                
-            # === Case 3: 章节节点 ===
+
+            # Case 3: 章节节点
             if str(node_id).startswith('chap_'):
-                # 【修复】同理，只替换第一个 'chap_'
                 real_id = node_id.replace('chap_', '', 1)
-                
                 chap_data = next((c for c in app_state.structure if str(c['id']) == str(real_id)), None)
-                
-                if not chap_data: 
-                    return 'unknown', safe_ctx, {} # <--- 修复点：返回 safe_ctx
-                
-                # 找父级分卷信息
+
+                if not chap_data:
+                    return 'unknown', safe_ctx, {}
+
                 parent_vol = next((v for v in app_state.volumes if str(v['id']) == str(chap_data.get('volume_id'))), None)
                 parent_title = parent_vol['title'] if parent_vol else "未知分卷"
                 parent_desc = parent_vol.get('desc', parent_title) if parent_vol else ""
-                
+
                 ctx = {
                     'self_info': chap_data.get('outline', '暂无大纲'),
                     'parent_info': f"**所属分卷**：{parent_title}\n**分卷目标**：{parent_desc[:100]}..."
                 }
                 return 'chapter', ctx, chap_data
-                
-            # === Case 4: 未知/兜底 ===
+
+            # Case 4: 未知/兜底
             return 'unknown', safe_ctx, {}
 
         except Exception as e:
             print(f"Error in get_node_context: {e}")
             return 'error', safe_ctx, {}
+
+
+# ==================== 智能工具箱生成函数 ====================
+
+def generate_toolbox_content(tool_id: str, params: dict) -> str:
+    """
+    智能工具箱内容生成
+
+    Args:
+        tool_id: 工具ID
+        params: 参数字典，可能包含 genre, count, gender, scene_type, emotion_type 等
+
+    Returns:
+        生成的文本内容
+    """
+    genre = params.get('genre', '玄幻')
+    count = params.get('count', 5)
+    gender = params.get('gender', '随机')
+    scene_type = params.get('scene_type', '山林')
+    emotion_type = params.get('emotion_type', '温馨')
+
+    # 生成提示词映射
+    prompts = {
+        # 起名大全
+        "name_char_cn": f"请生成 {count} 个好听的{genre}风格中文人名，包含男女，格式如：叶凡、姬紫月。每行一个名字，附带简短的性格暗示（不超过10字）。",
+        "name_char_en": f"请生成 {count} 个西幻风格的人名，格式如：亚瑟·潘德拉贡。每行一个名字。",
+        "name_org": f"请生成 {count} 个{genre}风格的宗派或组织名称，附带简短描述（不超过15字）。格式：名称 - 描述",
+        "name_skill": f"请生成 {count} 个{genre}风格的功法或武技名称，附带简短效果描述（不超过15字）。格式：名称 - 效果",
+        "name_item": f"请生成 {count} 个{genre}风格的法宝或丹药名称，附带简短描述（不超过15字）。格式：名称 - 描述",
+        "name_location": f"请生成 {count} 个{genre}风格的地名或场景名，附带简短描述（不超过15字）。格式：名称 - 描述",
+
+        # 角色生成器
+        "char_protagonist": f"请为一个{genre}风格的主角生成完整设定。\n性别：{gender}\n请按以下格式输出：\n【姓名】\n【性别】\n【年龄】\n【性格】（3-5个性格特点）\n【背景】（50字以内）\n【目标】（角色的主要目标）\n【金手指/特长】（如果有）",
+        "char_supporting": f"请为一个{genre}风格的重要配角生成完整设定。\n性别：{gender}\n请按以下格式输出：\n【姓名】\n【性别】\n【年龄】\n【性格】（3-5个性格特点）\n【背景】（50字以内）\n【与主角关系】",
+        "char_villain": f"请为一个{genre}风格的反派角色生成完整设定。\n性别：{gender}\n请按以下格式输出：\n【姓名】\n【性别】\n【年龄】\n【性格】（3-5个性格特点）\n【背景】（50字以内）\n【作恶动机】\n【弱点】",
+
+        # 书名生成器
+        "title_genre": f"请生成 {count} 个{genre}风格的小说书名，要求吸引眼球、有网文风格。每行一个书名。",
+
+        # 冲突生成器
+        "conflict_person": f"请为{genre}风格的故事生成3个人物之间的冲突设定。\n每个冲突包含：\n【冲突双方】\n【冲突原因】\n【冲突表现】\n【可能的解决方式】",
+        "conflict_plot": f"请为{genre}风格的故事生成3个剧情冲突点。\n每个冲突包含：\n【冲突类型】\n【冲突描述】（30字以内）\n【高潮设计】",
+        "conflict_world": f"请为{genre}风格的故事生成2个世界观层面的冲突设定。\n例如：种族矛盾、资源争夺、理念冲突等。\n每个包含详细的冲突背景和影响。",
+
+        # 简介生成器
+        "synopsis_short": f"请为一部{genre}风格的小说生成一个简短简介（100字以内），要求吸引读者、突出爽点。",
+        "synopsis_long": f"请为一部{genre}风格的小说生成详细简介，包含：\n【一句话卖点】（20字以内）\n【故事背景】（50字）\n【主角设定】（30字）\n【核心看点】（3个卖点）\n【适合读者】",
+
+        # 场景生成器
+        "scene_environment": f"请生成一段{genre}风格的{scene_type}环境描写，150字以内，要有画面感和氛围感。",
+        "scene_battle": f"请生成一段{genre}风格的战斗场景描写，200字以内，要有动作感和紧张感。",
+        "scene_emotion": f"请生成一段{emotion_type}情感场景描写，150字以内，要有情感共鸣。",
+
+        # 金手指生成器
+        "goldfinger_system": f"请为{genre}风格的主角生成3个系统类金手指设定。\n每个包含：\n【系统名称】\n【核心功能】\n【限制条件】\n【成长路线】",
+        "goldfinger_talent": f"请为{genre}风格的主角生成3个天赋类金手指设定。\n每个包含：\n【天赋名称】\n【天赋效果】\n【觉醒条件】\n【潜在风险】",
+        "goldfinger_item": f"请为{genre}风格的主角生成3个物品类金手指设定。\n每个包含：\n【物品名称】\n【核心能力】\n【获取方式】\n【隐藏功能】",
+
+        # 剧情转折
+        "twist_unexpected": f"请为{genre}风格的故事生成3个意想不到的剧情转折。\n每个包含：\n【转折类型】\n【铺垫暗示】\n【转折揭示】\n【后续影响】",
+        "twist_reversal": f"请为{genre}风格的故事生成3个反转剧情设定。\n每个包含：\n【表面假象】\n【真实情况】\n【揭示时机】\n【读者反应】",
+    }
+
+    prompt = prompts.get(tool_id, f"请生成一些{genre}风格的创意内容。")
+
+    try:
+        client = get_client()
+        response = client.chat.completions.create(
+            model=get_model('writer'),
+            messages=[
+                {"role": "system", "content": "你是一位专业的网文创作助手，擅长生成各类创意内容。请按要求输出，不要有多余的废话。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.9
+        )
+
+        result = response.choices[0].message.content
+
+        # 记录费用
+        record_tokens(
+            book_name="toolbox",
+            task_type=tool_id,
+            model=get_model('writer'),
+            input_tokens=response.usage.prompt_tokens,
+            output_tokens=response.usage.completion_tokens
+        )
+
+        return result
+
+    except Exception as e:
+        return f"生成失败: {str(e)}"
+
 
 # ================= 向量库管理器 (RAG) =================
 class MemoryManager:
@@ -3212,25 +3333,457 @@ def sync_review_pacing(paragraphs):
     return {"score": 5, "issues": []}
 
 
+def sync_review_emotion_curve(paragraphs):
+    """
+    情感曲线分析维度
+    分析章节的情绪走向，检查是否合理
+
+    Args:
+        paragraphs: 段落列表
+
+    Returns:
+        {"score": 8, "issues": [...], "emotion_curve": [...]}
+    """
+    task_type = "reviewer"
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
+
+    numbered_content = ""
+    for p in paragraphs:
+        numbered_content += f"【段落{p['id']}】\n{p['text']}\n\n"
+
+    prompt = f"""【任务】作为情感分析专家，分析以下章节的情绪曲线。
+
+【待审章节】
+{numbered_content}
+
+【分析要点】
+1. 识别每个主要段落的情绪基调（积极/消极/中性/紧张/舒缓等）
+2. 检测情绪转折是否合理
+3. 是否有情绪断层（突然从紧张变平淡无铺垫）
+4. 整体情绪弧线是否符合故事发展
+
+【输出要求】
+严格按JSON格式输出（不要用Markdown代码块）：
+{{
+    "score": 1-10分,
+    "emotion_curve": [
+        {{"paragraph_id": "p1", "emotion": "紧张", "intensity": 7}},
+        {{"paragraph_id": "p2", "emotion": "压抑", "intensity": 8}}
+    ],
+    "analysis": "整体情绪走向描述",
+    "issues": [
+        {{
+            "paragraph_id": "段落ID",
+            "quote": "问题原文引用",
+            "problem": "情绪问题（如转折突兀、断层等）",
+            "severity": "严重/中等/轻微",
+            "suggestion": "修改建议"
+        }}
+    ]
+}}
+"""
+
+    print(f"\n[情感分析] 开始分析...")
+
+    try:
+        current_client = get_client()
+        response = current_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            temperature=temperature
+        )
+
+        result = response.choices[0].message.content if response.choices else ""
+        record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
+
+        clean = result.replace("```json", "").replace("```", "").strip()
+        start, end = clean.find('{'), clean.rfind('}')
+        if start >= 0 and end > start:
+            json_str = _clean_control_chars_in_json(clean[start:end+1])
+            try:
+                parsed = json.loads(json_str)
+            except json.JSONDecodeError:
+                parsed = _parse_json_aggressive(json_str)
+
+            issues = []
+            for i, issue in enumerate(parsed.get('issues', [])):
+                issues.append({
+                    "id": f"emotion_{i+1}",
+                    "paragraph_id": issue.get('paragraph_id', 'p1'),
+                    "dimension": "情感",
+                    "type": "情绪曲线",
+                    "severity": issue.get('severity', '轻微'),
+                    "quote": issue.get('quote', ''),
+                    "description": issue.get('problem', ''),
+                    "suggestion": issue.get('suggestion', '')
+                })
+
+            print(f"[情感分析] 完成 | 评分: {parsed.get('score', '?')} | 问题数: {len(issues)}")
+            return {
+                "score": parsed.get('score', 5),
+                "issues": issues,
+                "emotion_curve": parsed.get('emotion_curve', []),
+                "analysis": parsed.get('analysis', '')
+            }
+
+    except Exception as e:
+        print(f"[情感分析] 异常: {e}")
+
+    return {"score": 5, "issues": [], "emotion_curve": [], "analysis": ""}
+
+
+def sync_review_dialogue_ratio(paragraphs):
+    """
+    对话/描写比例分析维度
+    分析叙事方式是否多样、是否单调
+
+    Args:
+        paragraphs: 段落列表
+
+    Returns:
+        {"score": 8, "issues": [...], "statistics": {...}}
+    """
+    task_type = "reviewer"
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
+
+    numbered_content = ""
+    for p in paragraphs:
+        numbered_content += f"【段落{p['id']}】\n{p['text']}\n\n"
+
+    prompt = f"""【任务】作为叙事分析专家，分析以下章节的叙事方式。
+
+【待审章节】
+{numbered_content}
+
+【分析要点】
+1. 统计对话段落与描写段落的数量和比例
+2. 检查是否存在大段纯对话或纯描写（超过5个连续段落）
+3. 分析叙事方式是否单一乏味
+4. 检查对话是否推动剧情、塑造人物
+
+【输出要求】
+严格按JSON格式输出（不要用Markdown代码块）：
+{{
+    "score": 1-10分,
+    "statistics": {{
+        "dialogue_count": 对话段落数,
+        "description_count": 描写段落数,
+        "dialogue_ratio": "对话占比百分比"
+    }},
+    "issues": [
+        {{
+            "paragraph_id": "段落ID（或段落范围如p5-p10）",
+            "quote": "问题原文引用",
+            "problem": "叙事问题（如描写过多、对话冗长等）",
+            "severity": "严重/中等/轻微",
+            "suggestion": "修改建议"
+        }}
+    ]
+}}
+"""
+
+    print(f"\n[叙事分析] 开始分析...")
+
+    try:
+        current_client = get_client()
+        response = current_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            temperature=temperature
+        )
+
+        result = response.choices[0].message.content if response.choices else ""
+        record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
+
+        clean = result.replace("```json", "").replace("```", "").strip()
+        start, end = clean.find('{'), clean.rfind('}')
+        if start >= 0 and end > start:
+            json_str = _clean_control_chars_in_json(clean[start:end+1])
+            try:
+                parsed = json.loads(json_str)
+            except json.JSONDecodeError:
+                parsed = _parse_json_aggressive(json_str)
+
+            issues = []
+            for i, issue in enumerate(parsed.get('issues', [])):
+                issues.append({
+                    "id": f"narrative_{i+1}",
+                    "paragraph_id": issue.get('paragraph_id', 'p1'),
+                    "dimension": "叙事",
+                    "type": "叙事方式",
+                    "severity": issue.get('severity', '轻微'),
+                    "quote": issue.get('quote', ''),
+                    "description": issue.get('problem', ''),
+                    "suggestion": issue.get('suggestion', '')
+                })
+
+            print(f"[叙事分析] 完成 | 评分: {parsed.get('score', '?')} | 问题数: {len(issues)}")
+            return {
+                "score": parsed.get('score', 5),
+                "issues": issues,
+                "narrative_stats": parsed.get('statistics', {})
+            }
+
+    except Exception as e:
+        print(f"[叙事分析] 异常: {e}")
+
+    return {"score": 5, "issues": [], "narrative_stats": {}}
+
+
+def sync_review_foreshadowing(paragraphs, context_info):
+    """
+    伏笔追踪分析维度
+    检查伏笔埋设和回收情况
+
+    Args:
+        paragraphs: 段落列表
+        context_info: 包含前文摘要、世界观等
+
+    Returns:
+        {"score": 8, "issues": [...], "foreshadowing": {...}}
+    """
+    task_type = "reviewer"
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
+
+    numbered_content = ""
+    for p in paragraphs:
+        numbered_content += f"【段落{p['id']}】\n{p['text']}\n\n"
+
+    # 获取前文信息
+    book_summary = context_info.get('book_summary', '')
+    prev_summary = context_info.get('prev_summary', '')
+
+    prompt = f"""【任务】作为伏笔追踪专家，分析以下章节的伏笔情况。
+
+【前文剧情摘要】
+{prev_summary[:1000] if prev_summary else '无'}
+
+【全书剧情总纲】
+{book_summary[:1000] if book_summary else '无'}
+
+【待审章节】
+{numbered_content}
+
+【分析要点】
+1. 识别本章新埋设的伏笔
+2. 检查是否回收了前文伏笔
+3. 伏笔是否自然、不刻意
+4. 是否有"断头伏笔"（埋了但明显不会回收）
+
+【输出要求】
+严格按JSON格式输出（不要用Markdown代码块）：
+{{
+    "score": 1-10分,
+    "foreshadowing": {{
+        "new": [
+            {{"paragraph_id": "p1", "content": "伏笔内容", "type": "物品/人物/剧情"}}
+        ],
+        "resolved": [
+            {{"content": "回收的伏笔", "resolution": "如何回收"}}
+        ]
+    }},
+    "issues": [
+        {{
+            "paragraph_id": "段落ID",
+            "quote": "问题原文引用",
+            "problem": "伏笔问题（如生硬、断头等）",
+            "severity": "严重/中等/轻微",
+            "suggestion": "修改建议"
+        }}
+    ]
+}}
+"""
+
+    print(f"\n[伏笔追踪] 开始分析...")
+
+    try:
+        current_client = get_client()
+        response = current_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            temperature=temperature
+        )
+
+        result = response.choices[0].message.content if response.choices else ""
+        record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
+
+        clean = result.replace("```json", "").replace("```", "").strip()
+        start, end = clean.find('{'), clean.rfind('}')
+        if start >= 0 and end > start:
+            json_str = _clean_control_chars_in_json(clean[start:end+1])
+            try:
+                parsed = json.loads(json_str)
+            except json.JSONDecodeError:
+                parsed = _parse_json_aggressive(json_str)
+
+            issues = []
+            for i, issue in enumerate(parsed.get('issues', [])):
+                issues.append({
+                    "id": f"foreshadow_{i+1}",
+                    "paragraph_id": issue.get('paragraph_id', 'p1'),
+                    "dimension": "伏笔",
+                    "type": "伏笔问题",
+                    "severity": issue.get('severity', '轻微'),
+                    "quote": issue.get('quote', ''),
+                    "description": issue.get('problem', ''),
+                    "suggestion": issue.get('suggestion', '')
+                })
+
+            print(f"[伏笔追踪] 完成 | 评分: {parsed.get('score', '?')} | 问题数: {len(issues)}")
+            return {
+                "score": parsed.get('score', 5),
+                "issues": issues,
+                "foreshadowing": parsed.get('foreshadowing', {})
+            }
+
+    except Exception as e:
+        print(f"[伏笔追踪] 异常: {e}")
+
+    return {"score": 5, "issues": [], "foreshadowing": {}}
+
+
+def sync_review_style_consistency(paragraphs, context_info):
+    """
+    风格一致性分析维度
+    检查文风是否统一、与前文是否协调
+
+    Args:
+        paragraphs: 段落列表
+        context_info: 包含前文章节内容用于对比
+
+    Returns:
+        {"score": 8, "issues": [...], "style_analysis": {...}}
+    """
+    task_type = "reviewer"
+    model_name = get_model(task_type)
+    temperature = get_temperature(task_type)
+
+    numbered_content = ""
+    for p in paragraphs:
+        numbered_content += f"【段落{p['id']}】\n{p['text']}\n\n"
+
+    # 获取前文内容用于风格对比
+    prev_content = context_info.get('prev_content', '')
+
+    prompt = f"""【任务】作为文风分析专家，检查以下章节的风格一致性。
+
+【前文章节片段】（用于风格对比）
+{prev_content[:1500] if prev_content else '无前文参考'}
+
+【待审章节】
+{numbered_content}
+
+【分析要点】
+1. 文风是否统一（文言/白话、正式/口语）
+2. 用词习惯是否一致（如称呼、术语）
+3. 句式风格是否协调（长句/短句比例）
+4. 是否有突兀的风格转换
+5. 是否符合该类型小说的一般风格
+
+【输出要求】
+严格按JSON格式输出（不要用Markdown代码块）：
+{{
+    "score": 1-10分,
+    "style_analysis": {{
+        "dominant_style": "主要风格描述",
+        "sentence_pattern": "句式特点",
+        "vocabulary_level": "用词水平评价"
+    }},
+    "issues": [
+        {{
+            "paragraph_id": "段落ID",
+            "quote": "问题原文引用",
+            "problem": "风格问题",
+            "severity": "严重/中等/轻微",
+            "suggestion": "修改建议"
+        }}
+    ]
+}}
+"""
+
+    print(f"\n[风格分析] 开始分析...")
+
+    try:
+        current_client = get_client()
+        response = current_client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            temperature=temperature
+        )
+
+        result = response.choices[0].message.content if response.choices else ""
+        record_api_call(response, task_type, model_name, config_pricing=CFG.get('pricing', {}))
+
+        clean = result.replace("```json", "").replace("```", "").strip()
+        start, end = clean.find('{'), clean.rfind('}')
+        if start >= 0 and end > start:
+            json_str = _clean_control_chars_in_json(clean[start:end+1])
+            try:
+                parsed = json.loads(json_str)
+            except json.JSONDecodeError:
+                parsed = _parse_json_aggressive(json_str)
+
+            issues = []
+            for i, issue in enumerate(parsed.get('issues', [])):
+                issues.append({
+                    "id": f"style_{i+1}",
+                    "paragraph_id": issue.get('paragraph_id', 'p1'),
+                    "dimension": "风格",
+                    "type": "风格一致性",
+                    "severity": issue.get('severity', '轻微'),
+                    "quote": issue.get('quote', ''),
+                    "description": issue.get('problem', ''),
+                    "suggestion": issue.get('suggestion', '')
+                })
+
+            print(f"[风格分析] 完成 | 评分: {parsed.get('score', '?')} | 问题数: {len(issues)}")
+            return {
+                "score": parsed.get('score', 5),
+                "issues": issues,
+                "style_analysis": parsed.get('style_analysis', {})
+            }
+
+    except Exception as e:
+        print(f"[风格分析] 异常: {e}")
+
+    return {"score": 5, "issues": [], "style_analysis": {}}
+
+
 def sync_review_chapter_multi_dimension(paragraphs, context_info):
     """
     多维度综合审稿
-    分别进行人设、逻辑、节奏检查，然后汇总
+    分别进行人设、逻辑、节奏、情感、叙事、伏笔、风格检查，然后汇总
 
     Args:
         paragraphs: 段落列表
         context_info: {
             "characters": "人物设定字符串",
             "world_setting": "世界观设定",
-            "chapter_outline": "本章大纲"
+            "chapter_outline": "本章大纲",
+            "book_summary": "全书剧情总纲",
+            "prev_summary": "前章摘要",
+            "prev_content": "前章内容片段"
         }
 
     Returns:
         {
             "overall_score": 7,
-            "dimension_scores": {"人设": 8, "逻辑": 7, "节奏": 6},
+            "dimension_scores": {"人设": 8, "逻辑": 7, "节奏": 6, "情感": 8, "叙事": 7, "伏笔": 6, "风格": 8},
             "issues": [...],
-            "summary": "整体评价"
+            "analysis_data": {
+                "emotion_curve": [...],
+                "emotion_analysis": "...",
+                "narrative_stats": {...},
+                "foreshadowing": {...},
+                "style_analysis": {...}
+            }
         }
     """
     print(f"\n{'='*50}")
@@ -3264,6 +3817,26 @@ def sync_review_chapter_multi_dimension(paragraphs, context_info):
     dimension_results['节奏'] = pacing_result
     all_issues.extend(pacing_result['issues'])
 
+    # 4. 情感曲线分析
+    emotion_result = sync_review_emotion_curve(paragraphs)
+    dimension_results['情感'] = emotion_result
+    all_issues.extend(emotion_result['issues'])
+
+    # 5. 叙事方式分析
+    narrative_result = sync_review_dialogue_ratio(paragraphs)
+    dimension_results['叙事'] = narrative_result
+    all_issues.extend(narrative_result['issues'])
+
+    # 6. 伏笔追踪分析
+    foreshadow_result = sync_review_foreshadowing(paragraphs, context_info)
+    dimension_results['伏笔'] = foreshadow_result
+    all_issues.extend(foreshadow_result['issues'])
+
+    # 7. 风格一致性分析
+    style_result = sync_review_style_consistency(paragraphs, context_info)
+    dimension_results['风格'] = style_result
+    all_issues.extend(style_result['issues'])
+
     # 计算总体评分
     scores = [r['score'] for r in dimension_results.values() if r.get('score', 0) > 0]
     overall_score = sum(scores) / len(scores) if scores else 5
@@ -3292,6 +3865,14 @@ def sync_review_chapter_multi_dimension(paragraphs, context_info):
             "severe": severe_count,
             "medium": medium_count,
             "minor": minor_count
+        },
+        # 新增分析数据
+        "analysis_data": {
+            "emotion_curve": emotion_result.get('emotion_curve', []),
+            "emotion_analysis": emotion_result.get('analysis', ''),
+            "narrative_stats": narrative_result.get('narrative_stats', {}),
+            "foreshadowing": foreshadow_result.get('foreshadowing', {}),
+            "style_analysis": style_result.get('style_analysis', {})
         }
     }
 
@@ -3301,3 +3882,267 @@ def sync_review_chapter_multi_dimension(paragraphs, context_info):
     print(f"  问题数: {len(all_issues)} (严重:{severe_count} 中等:{medium_count} 轻微:{minor_count})")
 
     return result
+
+
+# ==================== 世界观结构化管理 ====================
+
+# 预设模板
+WORLD_VIEW_TEMPLATES = {
+    "玄幻修仙": {
+        "basic_info": {
+            "genre": "玄幻修仙",
+            "era": "上古时代",
+            "tech_level": "无科技，依靠修炼"
+        },
+        "core_settings": {
+            "power_system": "修炼境界：炼气 → 筑基 → 金丹 → 元婴 → 化神 → 炼虚 → 大乘 → 渡劫\n每种境界有初期、中期、后期、巅峰四个小境界",
+            "social_structure": "以宗门和世家为主，皇朝为辅\n修士地位高于凡人，实力为尊",
+            "special_rules": "天地灵气为修炼之本\n渡劫成功可飞升上界\n天材地宝可加速修炼"
+        },
+        "key_elements": {
+            "important_items": "请填写重要法宝、灵器、神兵等",
+            "organizations": "请填写主要宗门、世家、皇朝等势力",
+            "locations": "请填写主要地域、秘境、禁地等"
+        },
+        "background": {
+            "history": "请填写世界观的历史背景",
+            "main_conflict": "请填写主要矛盾和冲突",
+            "development": "请填写未来发展趋势"
+        }
+    },
+    "科幻赛博": {
+        "basic_info": {
+            "genre": "科幻赛博",
+            "era": "近未来/星际时代",
+            "tech_level": "高度发达，AI、基因改造、机械义体普及"
+        },
+        "core_settings": {
+            "power_system": "基因改造等级：E级 → D级 → C级 → B级 → A级 → S级\n或机甲驾驶等级、异能觉醒等级等",
+            "social_structure": "企业财团主导，政府权力削弱\n赛博朋克风格：高科技低生活",
+            "special_rules": "意识上传与数字永生\nAI与人类共存/对立\n星际旅行与外星文明"
+        },
+        "key_elements": {
+            "important_items": "请填写关键科技、武器、资源等",
+            "organizations": "请填写主要企业、组织、势力等",
+            "locations": "请填写主要星球、城市、空间站等"
+        },
+        "background": {
+            "history": "请填写世界观的历史背景",
+            "main_conflict": "请填写主要矛盾和冲突",
+            "development": "请填写未来发展趋势"
+        }
+    },
+    "都市异能": {
+        "basic_info": {
+            "genre": "都市异能",
+            "era": "现代都市",
+            "tech_level": "现代科技水平，异能存在"
+        },
+        "core_settings": {
+            "power_system": "异能等级：F级 → E级 → D级 → C级 → B级 → A级 → S级 → SS级\n异能类型：元素系、强化系、精神系、特殊系等",
+            "social_structure": "表面上普通人社会\n暗中有异能者组织和监管机构",
+            "special_rules": "异能觉醒随机或可诱导\n异能使用有代价/限制\n存在异能犯罪与执法"
+        },
+        "key_elements": {
+            "important_items": "请填写重要道具、装备、资源等",
+            "organizations": "请填写异能组织、官方机构、反派势力等",
+            "locations": "请填写主要城市、秘密基地、特殊地点等"
+        },
+        "background": {
+            "history": "请填写异能起源、重大事件等",
+            "main_conflict": "请填写主要矛盾和冲突",
+            "development": "请填写未来发展趋势"
+        }
+    },
+    "古风武侠": {
+        "basic_info": {
+            "genre": "古风武侠",
+            "era": "古代中国背景",
+            "tech_level": "冷兵器时代，无现代科技"
+        },
+        "core_settings": {
+            "power_system": "武学境界：三流 → 二流 → 一流 → 绝顶 → 宗师 → 大宗师 → 破碎虚空\n内功、外功、轻功、暗器等武学体系",
+            "social_structure": "江湖与朝廷并存\n门派林立，正邪对立\n侠以武犯禁",
+            "special_rules": "内功修炼需天赋与机缘\n江湖规矩与道义\n秘籍传承与争夺"
+        },
+        "key_elements": {
+            "important_items": "请填写神兵利器、武功秘籍、稀世珍宝等",
+            "organizations": "请填写主要门派、帮会、势力等",
+            "locations": "请填写主要地域、名山、秘境等"
+        },
+        "background": {
+            "history": "请填写江湖历史、重大事件等",
+            "main_conflict": "请填写主要矛盾和冲突",
+            "development": "请填写未来发展趋势"
+        }
+    }
+}
+
+
+def world_view_structured_to_markdown(data: dict) -> str:
+    """将结构化世界观数据转换为 Markdown 格式"""
+    lines = ["# 世界观设定\n"]
+
+    # 基本信息
+    basic = data.get('basic_info', {})
+    if any(basic.values()):
+        lines.append("## 基本信息\n")
+        if basic.get('genre'):
+            lines.append(f"**题材类型**：{basic['genre']}\n")
+        if basic.get('era'):
+            lines.append(f"**时代背景**：{basic['era']}\n")
+        if basic.get('tech_level'):
+            lines.append(f"**科技水平**：{basic['tech_level']}\n")
+        lines.append("")
+
+    # 核心设定
+    core = data.get('core_settings', {})
+    if any(core.values()):
+        lines.append("## 核心设定\n")
+        if core.get('power_system'):
+            lines.append("### 力量体系\n")
+            lines.append(f"{core['power_system']}\n")
+        if core.get('social_structure'):
+            lines.append("### 社会结构\n")
+            lines.append(f"{core['social_structure']}\n")
+        if core.get('special_rules'):
+            lines.append("### 特殊规则\n")
+            lines.append(f"{core['special_rules']}\n")
+        lines.append("")
+
+    # 关键元素
+    key = data.get('key_elements', {})
+    if any(key.values()):
+        lines.append("## 关键元素\n")
+        if key.get('important_items'):
+            lines.append("### 重要物品\n")
+            lines.append(f"{key['important_items']}\n")
+        if key.get('organizations'):
+            lines.append("### 势力组织\n")
+            lines.append(f"{key['organizations']}\n")
+        if key.get('locations'):
+            lines.append("### 主要地点\n")
+            lines.append(f"{key['locations']}\n")
+        lines.append("")
+
+    # 背景故事
+    bg = data.get('background', {})
+    if any(bg.values()):
+        lines.append("## 背景故事\n")
+        if bg.get('history'):
+            lines.append("### 历史背景\n")
+            lines.append(f"{bg['history']}\n")
+        if bg.get('main_conflict'):
+            lines.append("### 主要矛盾\n")
+            lines.append(f"{bg['main_conflict']}\n")
+        if bg.get('development'):
+            lines.append("### 发展趋势\n")
+            lines.append(f"{bg['development']}\n")
+
+    return '\n'.join(lines)
+
+
+def check_world_view_consistency(world_view_data: dict, model: str = None) -> dict:
+    """
+    检查世界观一致性
+
+    Args:
+        world_view_data: 结构化世界观数据
+        model: 使用的模型
+
+    Returns:
+        {
+            "success": bool,
+            "issues": [
+                {
+                    "field": "字段名",
+                    "issue": "问题描述",
+                    "suggestion": "修改建议"
+                }
+            ],
+            "overall_assessment": "总体评价"
+        }
+    """
+    if model is None:
+        model = CFG.get('writer_model', 'deepseek-chat')
+
+    # 转换为 Markdown 用于检查
+    world_view_md = world_view_structured_to_markdown(world_view_data)
+
+    if not world_view_md.strip() or world_view_md == "# 世界观设定\n":
+        return {
+            "success": True,
+            "issues": [],
+            "overall_assessment": "世界观尚未填写内容"
+        }
+
+    prompt = f"""你是一位专业的世界观审核专家。请检查以下世界观设定是否存在矛盾、不合理或遗漏之处。
+
+世界观设定：
+{world_view_md}
+
+请从以下维度检查：
+1. 内部一致性：各设定之间是否存在矛盾
+2. 逻辑合理性：设定是否符合逻辑
+3. 完整性：是否有明显的遗漏
+4. 可操作性：设定是否足够具体，能否指导写作
+
+请以 JSON 格式输出检查结果：
+
+```json
+{{
+    "issues": [
+        {{
+            "field": "科技水平",
+            "issue": "设定为古代背景，但力量体系中出现了'激光武器'",
+            "suggestion": "修改为'剑气'或'神兵'等符合古代背景的设定"
+        }}
+    ],
+    "overall_assessment": "总体评价，包括优点和需要改进的地方"
+}}
+```
+
+如果没有问题，issues 数组为空。请只输出 JSON，不要有其他内容。"""
+
+    try:
+        client = get_client()
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "你是一位专业的世界观审核专家，擅长发现设定中的矛盾和不合理之处。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3
+        )
+
+        content = response.choices[0].message.content
+
+        # 记录费用
+        record_tokens(
+            book_name="world_view_check",
+            task_type="consistency_check",
+            model=model,
+            input_tokens=response.usage.prompt_tokens,
+            output_tokens=response.usage.completion_tokens
+        )
+
+        # 解析 JSON
+        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', content)
+        if json_match:
+            content = json_match.group(1)
+
+        result = json.loads(content)
+
+        return {
+            "success": True,
+            "issues": result.get("issues", []),
+            "overall_assessment": result.get("overall_assessment", "")
+        }
+
+    except Exception as e:
+        print(f"[世界观一致性检查] 错误: {e}")
+        return {
+            "success": False,
+            "issues": [],
+            "overall_assessment": f"检查失败: {str(e)}"
+        }

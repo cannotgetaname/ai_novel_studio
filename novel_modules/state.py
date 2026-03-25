@@ -206,5 +206,12 @@ ui_refs = {
     'loc_view_mode': None,
     'loc_graph_container': None,
     # 【新增】费用管理
-    'billing_container': None
+    'billing_container': None,
+    # 【新增】写作目标
+    'goals_container': None,
+    # 【新增】拆书分析
+    'analysis_container': None,
+    'analysis_list_container': None,
+    # 【新增】智能工具箱
+    'toolbox_panel': None
 }

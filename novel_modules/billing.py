@@ -377,3 +377,45 @@ def estimate_and_record(prompt: str, result: str, task_type: str, model: str,
     except Exception as e:
         print(f"[Billing] 估算记录失败: {e}")
         return None
+
+
+def record_tokens(book_name: str, task_type: str, model: str,
+                  input_tokens: int, output_tokens: int,
+                  config_pricing: Optional[Dict] = None) -> Optional[Dict]:
+    """
+    便捷函数：直接从 token 数量记录费用（用于非流式调用）
+
+    Args:
+        book_name: 书籍名称
+        task_type: 任务类型
+        model: 模型名称
+        input_tokens: 输入 token 数
+        output_tokens: 输出 token 数
+        config_pricing: 配置中的价格表
+
+    Returns:
+        记录字典
+    """
+    try:
+        billing = get_billing_service()
+
+        if book_name is None:
+            try:
+                from novel_modules.state import app_state
+                book_name = app_state.current_book_name or "Unknown"
+            except:
+                book_name = "Unknown"
+
+        return billing.record_call(
+            book_name=book_name,
+            task_type=task_type,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cost=0,
+            status="success",
+            config_pricing=config_pricing
+        )
+    except Exception as e:
+        print(f"[Billing] 记录失败: {e}")
+        return None
