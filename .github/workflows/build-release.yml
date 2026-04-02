@@ -1,0 +1,184 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller main.py \
+            --name ai_writer \
+            --noconfirm \
+            --clean \
+            --collect-all chromadb \
+            --collect-all nicegui \
+            --collect-data sentence_transformers \
+            --copy-metadata chromadb \
+            --copy-metadata nicegui \
+            --hidden-import=posthog \
+            --hidden-import=overrides \
+            --hidden-import=onnxruntime \
+            --hidden-import=tokenizers \
+            --add-data "novel_modules:novel_modules" \
+            --add-data "config.example.json:." \
+            --exclude-module pytest \
+            --exclude-module hypothesis \
+            --exclude-module tkinter \
+            --exclude-module matplotlib \
+            --exclude-module IPython \
+            --console
+
+      - name: Prepare distribution
+        run: |
+          cd dist/ai_writer
+          mkdir -p projects data/global
+          cp config.example.json config.json.example
+          cat > start.sh << 'EOF'
+          #!/bin/bash
+          cd "$(dirname "$0")"
+          if [ ! -f config.json ]; then
+              cp config.json.example config.json
+              echo "已创建 config.json，请修改 API Key 后重新启动"
+              exit 0
+          fi
+          echo "启动 AI Writer..."
+          echo "浏览器访问 http://localhost:8081"
+          ./ai_writer
+          EOF
+          chmod +x start.sh
+
+      - name: Create archive
+        run: |
+          cd dist
+          tar -czvf ai_writer_linux_x64.tar.gz ai_writer/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: dist/ai_writer_linux_x64.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller main.py `
+            --name ai_writer `
+            --noconfirm `
+            --clean `
+            --collect-all chromadb `
+            --collect-all nicegui `
+            --collect-data sentence_transformers `
+            --copy-metadata chromadb `
+            --copy-metadata nicegui `
+            --hidden-import=posthog `
+            --hidden-import=overrides `
+            --hidden-import=onnxruntime `
+            --hidden-import=tokenizers `
+            --add-data "novel_modules;novel_modules" `
+            --add-data "config.example.json;." `
+            --exclude-module pytest `
+            --exclude-module hypothesis `
+            --exclude-module tkinter `
+            --exclude-module matplotlib `
+            --exclude-module IPython `
+            --console
+
+      - name: Prepare distribution
+        run: |
+          cd dist/ai_writer
+          mkdir projects
+          mkdir data/global
+          copy config.example.json config.json.example
+          $startScript = @"
+          @echo off
+          cd /d `%~dp0
+          if not exist config.json (
+              copy config.json.example config.json
+              echo 已创建 config.json，请修改 API Key 后重新启动
+              pause
+              exit /b 0
+          )
+          echo 启动 AI Writer...
+          echo 浏览器访问 http://localhost:8081
+          ai_writer.exe
+          pause
+          "@
+          $startScript | Out-File -Encoding ASCII start.bat
+
+      - name: Create archive
+        run: |
+          cd dist
+          Compress-Archive -Path ai_writer -DestinationPath ai_writer_windows_x64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: dist/ai_writer_windows_x64.zip
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download Linux build
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-build
+          path: artifacts/
+
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: artifacts/
+
+      - name: Get version
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
+          name: ${{ steps.get_version.outputs.VERSION }}
+          generate_notes: true
+          files: |
+            artifacts/ai_writer_linux_x64.tar.gz
+            artifacts/ai_writer_windows_x64.zip
