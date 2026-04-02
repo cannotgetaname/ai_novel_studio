@@ -74,7 +74,7 @@
 | 项目 | 要求 |
 |------|------|
 | Python | 3.9+ (推荐 3.12) |
-| 操作系统 | Windows / Linux / macOS |
+| 操作系统 | Windows / Linux |
 | 网络 | 能访问 AI API 服务 |
 
 ### 一键启动
@@ -87,7 +87,7 @@
 - 创建配置文件（如不存在）
 - 启动应用
 
-#### Linux/macOS 用户
+#### Linux 用户
 
 ```bash
 # 添加执行权限（首次需要）
@@ -114,7 +114,7 @@ cd ai_novel_studio
 python -m venv venv
 .\venv\Scripts\activate
 
-# Linux/macOS
+# Linux
 python3 -m venv venv
 source venv/bin/activate
 ```
@@ -281,13 +281,10 @@ pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 <details>
 <summary>ChromaDB SQLite 错误</summary>
 
-Linux/macOS:
+Linux:
 ```bash
 # Ubuntu/Debian
 sudo apt-get install sqlite3 libsqlite3-dev
-
-# macOS
-brew install sqlite
 ```
 </details>
 
@@ -329,7 +326,7 @@ ai_writer/
 ├── config.example.json     # 配置模板
 ├── requirements.txt        # 依赖列表
 ├── start_windows.bat       # Windows 启动脚本
-├── start_linux.sh          # Linux/macOS 启动脚本
+├── start_linux.sh          # Linux 启动脚本
 ├── check_environment.py    # 环境诊断工具
 ├── novel_modules/          # 功能模块
 │   ├── architect.py        # 架构师模块
@@ -361,7 +358,6 @@ ai_writer/
 - 分享使用经验
 
 ### 待办事项
-- [ ] macOS 预编译版本支持
 - [ ] 增强EPUB/TXT导出功能
 - [ ] 集成本地LLM支持(Ollama)
 - [ ] 开发角色对话模拟功能
