@@ -52,7 +52,8 @@ jobs:
         run: |
           cd dist/ai_writer
           mkdir -p projects data/global
-          cp config.example.json config.json.example
+          # 从项目根目录复制配置文件
+          cp $GITHUB_WORKSPACE/config.example.json config.json.example
           cat > start.sh << 'EOF'
           #!/bin/bash
           cd "$(dirname "$0")"
@@ -124,7 +125,8 @@ jobs:
           cd dist/ai_writer
           mkdir projects
           mkdir data/global
-          copy config.example.json config.json.example
+          # 从项目根目录复制配置文件
+          copy $env:GITHUB_WORKSPACE\config.example.json config.json.example
           $startScript = @"
           @echo off
           cd /d `%~dp0
