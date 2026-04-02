@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:  # 手动触发
 
+permissions:
+  contents: write
+
 jobs:
   build-linux:
     runs-on: ubuntu-latest
