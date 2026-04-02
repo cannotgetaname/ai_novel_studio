@@ -33,9 +33,9 @@ jobs:
             --name ai_writer \
             --noconfirm \
             --clean \
-            --collect-all chromadb \
-            --collect-all nicegui \
-            --collect-data sentence_transformers \
+            --collect-submodules chromadb \
+            --collect-submodules nicegui \
+            --collect-data nicegui \
             --copy-metadata chromadb \
             --copy-metadata nicegui \
             --hidden-import=posthog \
@@ -49,6 +49,16 @@ jobs:
             --exclude-module tkinter \
             --exclude-module matplotlib \
             --exclude-module IPython \
+            --exclude-module jupyter \
+            --exclude-module notebook \
+            --exclude-module PIL \
+            --exclude-module pillow \
+            --exclude-module scipy \
+            --exclude-module pandas \
+            --exclude-module numpy.f2py \
+            --exclude-module numpy.tests \
+            --exclude-module torch \
+            --exclude-module tensorflow \
             --console
 
       - name: Prepare distribution
@@ -105,9 +115,9 @@ jobs:
             --name ai_writer `
             --noconfirm `
             --clean `
-            --collect-all chromadb `
-            --collect-all nicegui `
-            --collect-data sentence_transformers `
+            --collect-submodules chromadb `
+            --collect-submodules nicegui `
+            --collect-data nicegui `
             --copy-metadata chromadb `
             --copy-metadata nicegui `
             --hidden-import=posthog `
@@ -121,6 +131,16 @@ jobs:
             --exclude-module tkinter `
             --exclude-module matplotlib `
             --exclude-module IPython `
+            --exclude-module jupyter `
+            --exclude-module notebook `
+            --exclude-module PIL `
+            --exclude-module pillow `
+            --exclude-module scipy `
+            --exclude-module pandas `
+            --exclude-module numpy.f2py `
+            --exclude-module numpy.tests `
+            --exclude-module torch `
+            --exclude-module tensorflow `
             --console
 
       - name: Prepare distribution
