@@ -46,11 +46,30 @@
 - **进度追踪**：实时显示写作进度
 - **连续天数**：激励持续创作
 
+### 🔮 伏笔追踪
+- **全生命周期管理**：埋设 → 追踪 → 预警 → 回收
+- **智能预警**：超过设定章数未回收自动提醒
+- **多类型支持**：物品/人物/剧情/悬念/设定伏笔分类
+- **概览统计**：活跃/已回收/预警数量一目了然
+
 ---
 
 ## 🚀 快速开始
 
-### 环境要求
+### 方式一：下载预编译版本（推荐）
+
+从 [Releases](https://github.com/cannotgetaname/ai_novel_studio/releases) 页面下载对应平台的压缩包：
+
+| 平台 | 文件 | 说明 |
+|------|------|------|
+| Windows | `ai_writer_windows_x64.zip` | 解压后运行 `start.bat` |
+| Linux | `ai_writer_linux_x64.tar.gz` | 解压后运行 `./start.sh` |
+
+首次运行会提示配置 API Key，修改 `config.json` 后再次启动即可。
+
+### 方式二：从源码运行
+
+#### 环境要求
 
 | 项目 | 要求 |
 |------|------|
@@ -322,7 +341,8 @@ ai_writer/
 │   ├── toolbox.py          # 智能工具箱
 │   ├── book_analysis.py    # 拆书分析
 │   ├── billing.py          # 费用管理
-│   └── goals.py            # 写作目标
+│   ├── goals.py            # 写作目标
+│   └── foreshadowing.py    # 伏笔追踪
 ├── data/                   # 全局数据 (运行后生成)
 │   └── global/             # 跨项目数据
 ├── projects/               # 项目数据 (运行后生成)
@@ -341,6 +361,7 @@ ai_writer/
 - 分享使用经验
 
 ### 待办事项
+- [ ] macOS 预编译版本支持
 - [ ] 增强EPUB/TXT导出功能
 - [ ] 集成本地LLM支持(Ollama)
 - [ ] 开发角色对话模拟功能
