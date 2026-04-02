@@ -486,6 +486,7 @@ async def main_page():
                     t_char = ui.tab('人物')
                     t_item = ui.tab('物品')
                     t_loc = ui.tab('地点')
+                    t_foreshadow = ui.tab('伏笔')
 
                 # 二级 Tab Panels
                 with ui.tab_panels(set_tabs, value=t_world).classes('w-full flex-grow h-0'):
@@ -543,6 +544,23 @@ async def main_page():
                             with ui.element('div').classes('w-full h-full').bind_visibility_from(ui_refs['loc_view_mode'], 'text', backward=lambda x: x == 'graph'):
                                 ui_refs['loc_graph_container'] = ui.column().classes('w-full h-full')
                             settings.refresh_loc_ui()
+
+                    # 2.5 伏笔追踪
+                    with ui.tab_panel(t_foreshadow).classes('h-full w-full p-2 flex flex-col'):
+                        with ui.row().classes('w-full justify-between items-center pb-2 shrink-0'):
+                            ui.label('伏笔追踪').classes('text-lg font-bold')
+                            with ui.row():
+                                ui.button(icon='settings', on_click=settings.open_foreshadow_settings_dialog).props('flat round dense')
+                                ui.button(icon='refresh', on_click=settings.refresh_foreshadow_ui).props('flat round dense')
+                                ui.button('添加伏笔', icon='add', on_click=lambda: settings.open_foreshadow_dialog()).props('size=sm color=teal')
+
+                        # 状态筛选隐藏标签
+                        ui_refs['foreshadow_status_filter'] = ui.label('active').classes('hidden')
+
+                        # 伏笔列表容器
+                        with ui.scroll_area().classes('w-full flex-grow border bg-grey-1'):
+                            ui_refs['foreshadow_container'] = ui.column().classes('w-full p-2')
+                            settings.refresh_foreshadow_ui()
 
             # --- Tab 3: 图谱 ---
             with ui.tab_panel(t_graph).classes('h-full w-full p-0 flex flex-col'):

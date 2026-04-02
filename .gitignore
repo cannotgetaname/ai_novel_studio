@@ -42,7 +42,16 @@ config.json
 Thumbs.db
 docs/
 
-# 分发
+# 分发/打包
 dist/
 build/
 *.egg-info/
+*.spec
+*.manifest
+
+# Nuitka 构建产物
+*.bin
+*.c
+main.build/
+main.dist/
+.nuitka/

@@ -181,11 +181,14 @@ app_state = AppState()
 class DynamicProxy:
     def __init__(self, attr_name):
         self.attr_name = attr_name
-        
+
     def __getattr__(self, name):
         # 1. 获取当前的 manager 或 memory 对象
         current_obj = getattr(app_state, self.attr_name)
-        # 2. 在当前对象上获取方法或属性（如 load_chapter_content）
+        # 2. 检查对象是否已初始化
+        if current_obj is None:
+            raise RuntimeError(f"{self.attr_name} 尚未初始化，请先加载项目")
+        # 3. 在当前对象上获取方法或属性（如 load_chapter_content）
         return getattr(current_obj, name)
 
 # 使用代理替代原始对象
@@ -213,5 +216,9 @@ ui_refs = {
     'analysis_container': None,
     'analysis_list_container': None,
     # 【新增】智能工具箱
-    'toolbox_panel': None
+    'toolbox_panel': None,
+    # 【新增】伏笔追踪
+    'foreshadow_container': None,
+    'foreshadow_status_filter': None,
+    'foreshadow_warning_panel': None
 }

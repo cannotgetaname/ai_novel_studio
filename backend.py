@@ -17,6 +17,9 @@ import hashlib
 # Token 计费模块
 from novel_modules.billing import get_billing_service, record_api_call, estimate_and_record, record_tokens
 
+# 伏笔追踪模块
+from novel_modules.foreshadowing import ForeshadowManager
+
 
 def count_words(text):
     """
@@ -1889,6 +1892,10 @@ def stream_call_llm(prompt, system_prompt, task_type="writer"):
     model_name = get_model(task_type)
     temperature = get_temperature(task_type)
     print(f"\n[LLM Router - Stream] 任务: {task_type} | 模型: {model_name}")
+
+    # 累计输出内容用于计费
+    accumulated_content = []
+
     try:
         current_client = get_client()
         stream = current_client.chat.completions.create(
@@ -1899,8 +1906,21 @@ def stream_call_llm(prompt, system_prompt, task_type="writer"):
         )
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+                content_piece = chunk.choices[0].delta.content
+                accumulated_content.append(content_piece)
+                yield content_piece
+
+        # 流式结束后记录费用（估算）
+        full_content = ''.join(accumulated_content)
+        estimate_and_record(
+            prompt=f"{system_prompt}\n{prompt}",
+            result=full_content,
+            task_type=task_type,
+            model=model_name,
+            config_pricing=CFG.get('pricing', {})
+        )
         print("[LLM Router - Stream] 完成")
+
     except ValueError as e:
         print(f"[LLM Router - Stream] ValueError: {str(e)}")
         yield f"Error: {str(e)}"
@@ -1914,6 +1934,10 @@ async def async_stream_call_llm(prompt, system_prompt, task_type="writer"):
     model_name = get_model(task_type)
     temperature = get_temperature(task_type)
     print(f"\n[LLM Router - Async Stream] 任务: {task_type} | 模型: {model_name}")
+
+    # 累计输出内容用于计费
+    accumulated_content = []
+
     try:
         current_client = get_client()
         stream = await asyncio.to_thread(
@@ -1926,8 +1950,21 @@ async def async_stream_call_llm(prompt, system_prompt, task_type="writer"):
         )
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+                content_piece = chunk.choices[0].delta.content
+                accumulated_content.append(content_piece)
+                yield content_piece
             await asyncio.sleep(0)  # 让出控制权
+
+        # 流式结束后记录费用（估算）
+        full_content = ''.join(accumulated_content)
+        estimate_and_record(
+            prompt=f"{system_prompt}\n{prompt}",
+            result=full_content,
+            task_type=task_type,
+            model=model_name,
+            config_pricing=CFG.get('pricing', {})
+        )
+
     except ValueError as e:
         yield f"Error: {str(e)}"
     except Exception as e:
@@ -1986,6 +2023,10 @@ def stream_rewrite_llm(selected_text, context_pre, context_post, instruction):
     model_name = get_model(task_type)
     temperature = get_temperature(task_type)
     prompt = f"【任务】重写文本。\n【上文】...{context_pre[-500:]}\n【待修改】{selected_text}\n【下文】{context_post[:500]}...\n【要求】{instruction}"
+
+    # 累计输出内容用于计费
+    accumulated_content = []
+
     try:
         current_client = get_client()
         stream = current_client.chat.completions.create(
@@ -1996,7 +2037,20 @@ def stream_rewrite_llm(selected_text, context_pre, context_post, instruction):
         )
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+                content_piece = chunk.choices[0].delta.content
+                accumulated_content.append(content_piece)
+                yield content_piece
+
+        # 流式结束后记录费用（估算）
+        full_content = ''.join(accumulated_content)
+        estimate_and_record(
+            prompt=prompt,
+            result=full_content,
+            task_type=task_type,
+            model=model_name,
+            config_pricing=CFG.get('pricing', {})
+        )
+
     except ValueError as e:
         yield f"Error: {str(e)}"
     except Exception as e:
@@ -2067,6 +2121,10 @@ def stream_review_chapter(content, context_str):
     prompt = f"【待审查正文】\n{content}\n【参考设定】\n{context_str}\n【任务】审查逻辑一致性、剧情节奏、文笔。输出Markdown报告。"
     print(f"\n[审稿-流式] 模型: {model_name} | 温度: {temperature}")
     print(f"[审稿-流式] 正文长度: {len(content)} | 设定长度: {len(context_str)}")
+
+    # 累计输出内容用于计费
+    accumulated_content = []
+
     try:
         current_client = get_client()
         stream = current_client.chat.completions.create(
@@ -2077,8 +2135,21 @@ def stream_review_chapter(content, context_str):
         )
         for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
+                content_piece = chunk.choices[0].delta.content
+                accumulated_content.append(content_piece)
+                yield content_piece
+
+        # 流式结束后记录费用（估算）
+        full_content = ''.join(accumulated_content)
+        estimate_and_record(
+            prompt=f"{sys_prompt}\n{prompt}",
+            result=full_content,
+            task_type=task_type,
+            model=model_name,
+            config_pricing=CFG.get('pricing', {})
+        )
         print("[审稿-流式] 完成")
+
     except ValueError as e:
         print(f"[审稿-流式] ValueError: {str(e)}")
         yield f"Error: {str(e)}"
@@ -3534,7 +3605,7 @@ def sync_review_dialogue_ratio(paragraphs):
     return {"score": 5, "issues": [], "narrative_stats": {}}
 
 
-def sync_review_foreshadowing(paragraphs, context_info):
+def sync_review_foreshadowing(paragraphs, context_info, project_path=None, current_chapter=None):
     """
     伏笔追踪分析维度
     检查伏笔埋设和回收情况
@@ -3542,6 +3613,8 @@ def sync_review_foreshadowing(paragraphs, context_info):
     Args:
         paragraphs: 段落列表
         context_info: 包含前文摘要、世界观等
+        project_path: 项目路径（用于保存伏笔）
+        current_chapter: 当前章节编号（用于保存伏笔）
 
     Returns:
         {"score": 8, "issues": [...], "foreshadowing": {...}}
@@ -3636,10 +3709,33 @@ def sync_review_foreshadowing(paragraphs, context_info):
                 })
 
             print(f"[伏笔追踪] 完成 | 评分: {parsed.get('score', '?')} | 问题数: {len(issues)}")
+
+            foreshadowing_data = parsed.get('foreshadowing', {})
+
+            # 保存伏笔到数据库（如果提供了项目路径）
+            if project_path and current_chapter:
+                try:
+                    foreshadow_mgr = ForeshadowManager(project_path)
+
+                    # 保存新伏笔
+                    new_foreshadows = foreshadowing_data.get('new', [])
+                    if new_foreshadows:
+                        created = foreshadow_mgr.save_from_review(new_foreshadows, current_chapter)
+                        print(f"[伏笔追踪] 新增伏笔: {len(created)} 个")
+
+                    # 更新已回收伏笔
+                    resolved_list = foreshadowing_data.get('resolved', [])
+                    if resolved_list:
+                        resolved = foreshadow_mgr.batch_resolve_from_review(resolved_list, current_chapter)
+                        print(f"[伏笔追踪] 回收伏笔: {len(resolved)} 个")
+
+                except Exception as e:
+                    print(f"[伏笔追踪] 保存失败: {e}")
+
             return {
                 "score": parsed.get('score', 5),
                 "issues": issues,
-                "foreshadowing": parsed.get('foreshadowing', {})
+                "foreshadowing": foreshadowing_data
             }
 
     except Exception as e:
@@ -3756,7 +3852,7 @@ def sync_review_style_consistency(paragraphs, context_info):
     return {"score": 5, "issues": [], "style_analysis": {}}
 
 
-def sync_review_chapter_multi_dimension(paragraphs, context_info):
+def sync_review_chapter_multi_dimension(paragraphs, context_info, project_path=None, current_chapter=None):
     """
     多维度综合审稿
     分别进行人设、逻辑、节奏、情感、叙事、伏笔、风格检查，然后汇总
@@ -3771,6 +3867,8 @@ def sync_review_chapter_multi_dimension(paragraphs, context_info):
             "prev_summary": "前章摘要",
             "prev_content": "前章内容片段"
         }
+        project_path: 项目路径（用于伏笔保存）
+        current_chapter: 当前章节编号（用于伏笔保存）
 
     Returns:
         {
@@ -3828,7 +3926,7 @@ def sync_review_chapter_multi_dimension(paragraphs, context_info):
     all_issues.extend(narrative_result['issues'])
 
     # 6. 伏笔追踪分析
-    foreshadow_result = sync_review_foreshadowing(paragraphs, context_info)
+    foreshadow_result = sync_review_foreshadowing(paragraphs, context_info, project_path, current_chapter)
     dimension_results['伏笔'] = foreshadow_result
     all_issues.extend(foreshadow_result['issues'])
 

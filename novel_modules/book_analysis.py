@@ -374,7 +374,8 @@ class BookAnalysisManager:
                 task_type="book_analysis",
                 model=model,
                 input_tokens=response.usage.prompt_tokens,
-                output_tokens=response.usage.completion_tokens
+                output_tokens=response.usage.completion_tokens,
+                config_pricing=backend.CFG.get('pricing', {})
             )
 
             return {

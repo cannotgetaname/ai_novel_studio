@@ -28,6 +28,100 @@ def update_char_count():
         # 显示格式: 总字数(中文字) / 总字符
         char_count_ref.set_text(f"字数: {stats['total_words']:,} (汉字{stats['chinese']:,})")
 
+
+def refresh_foreshadow_warning_ui():
+    """刷新伏笔提醒 UI - 在写作时显示需要回收的伏笔"""
+    container = ui_refs.get('foreshadow_warning_panel')
+    if not container:
+        return
+
+    container.clear()
+
+    try:
+        from novel_modules.foreshadowing import ForeshadowManager
+        project_path = manager.project_root if hasattr(manager, 'project_root') else None
+
+        if not project_path:
+            with container:
+                ui.label('请先加载项目').classes('text-grey-5 italic')
+            return
+
+        fs_mgr = ForeshadowManager(project_path)
+        current_chapter = app_state.current_chapter_idx + 1 if hasattr(app_state, 'current_chapter_idx') else 0
+
+        # 获取预警伏笔
+        warnings = fs_mgr.check_warnings(current_chapter)
+
+        with container:
+            # 当前章节提示
+            ui.label(f'当前写作: 第 {current_chapter} 章').classes('text-sm text-grey-6 mb-2')
+
+            if not warnings:
+                with ui.card().classes('w-full p-3 bg-green-50'):
+                    ui.label('✅ 当前无伏笔预警').classes('text-green-600')
+                    ui.label('所有活跃伏笔状态正常').classes('text-sm text-grey-5')
+            else:
+                # 预警卡片
+                with ui.card().classes('w-full p-2 bg-red-50 mb-2'):
+                    with ui.row().classes('w-full items-center gap-2'):
+                        ui.icon('warning', color='red').classes('text-lg')
+                        ui.label(f'⚠️ 有 {len(warnings)} 个伏笔需要关注').classes('text-red-600 font-bold')
+
+                for w in warnings[:5]:  # 只显示前5个
+                    with ui.card().classes('w-full p-2 bg-white mb-1 border'):
+                        # 类型标签
+                        type_colors = {'物品': 'purple', '人物': 'blue', '剧情': 'green', '悬念': 'orange'}
+                        type_badge_color = type_colors.get(w.get('type', '剧情'), 'grey')
+
+                        with ui.row().classes('w-full items-center gap-2'):
+                            ui.badge(w.get('type', '剧情'), color=type_badge_color).props('dense')
+                            importance_colors = {'high': 'red', 'medium': 'orange', 'low': 'grey'}
+                            ui.badge(w.get('importance', 'medium'), color=importance_colors.get(w.get('importance', 'medium'), 'grey')).props('dense')
+                            ui.label(w['content'][:35]).classes('text-sm font-bold flex-grow')
+
+                        ui.label(w.get('warning_message', '')).classes('text-xs text-red-500 mt-1')
+
+                        with ui.row().classes('w-full justify-between items-center mt-1'):
+                            ui.label(f"埋设: 第{w['source_chapter']}章 | 已过 {w.get('chapters_since', '?')} 章").classes('text-xs text-grey-5')
+                            ui.button('标记回收', on_click=lambda fid=w['id']: quick_resolve_foreshadow(fid)).props('size=sm flat color=blue')
+
+            # 显示本章埋设的伏笔
+            chapter_foreshadows = fs_mgr.get_foreshadows_by_chapter(current_chapter, mode='source')
+            if chapter_foreshadows:
+                with ui.expansion(f'📖 本章埋设 ({len(chapter_foreshadows)}个)', icon='lightbulb').classes('w-full bg-yellow-50 mt-2'):
+                    with ui.column().classes('w-full p-2'):
+                        for fs in chapter_foreshadows:
+                            with ui.row().classes('w-full items-center gap-2'):
+                                ui.label(f"• {fs['content'][:30]}").classes('text-sm')
+                                if fs['status'] == 'resolved':
+                                    ui.badge('已回收', color='blue').props('dense')
+
+            # 快速操作按钮
+            with ui.row().classes('w-full justify-end mt-2'):
+                ui.button('管理伏笔', on_click=lambda: ui_refs['foreshadow_status_filter'] and None).props('size=sm flat')  # 切换到设定页面的伏笔标签
+
+    except Exception as e:
+        with container:
+            ui.label(f'加载伏笔失败: {str(e)}').classes('text-red-5')
+
+
+def quick_resolve_foreshadow(foreshadow_id):
+    """快速标记伏笔回收"""
+    try:
+        from novel_modules.foreshadowing import ForeshadowManager
+        project_path = manager.project_root if hasattr(manager, 'project_root') else None
+
+        if project_path:
+            fs_mgr = ForeshadowManager(project_path)
+            current_chapter = app_state.current_chapter_idx + 1 if hasattr(app_state, 'current_chapter_idx') else 0
+
+            fs_mgr.resolve_foreshadow(foreshadow_id, current_chapter)
+            ui.notify('已标记回收', type='positive')
+            refresh_foreshadow_warning_ui()
+
+    except Exception as e:
+        ui.notify(f'操作失败: {str(e)}', type='warning')
+
 # 执行自动保存
 async def perform_auto_save():
     # 【双重保险】如果标题为空，坚决不保存！防止覆盖成空数据
@@ -136,8 +230,8 @@ def save_current_state():
             # 保存状态到撤销栈
             app_state.save_state_for_undo(title, outline, content, time_label, time_events)
 
-# 全局标志，标记是否正在执行撤销/重做操作
-is_undo_redo_operation = False
+# 全局标志，标记是否正在执行撤销/重做操作（已在文件开头定义）
+# is_undo_redo_operation = False  # 注释掉冗余定义
 
 async def undo_action():
     """执行撤销操作"""
@@ -1010,10 +1104,16 @@ async def open_review_dialog():
             status_label.set_text(f'共 {len(paragraphs)} 个段落，开始多维度审稿...')
 
             # 2. 执行多维度审稿
+            # 获取项目路径和当前章节号（用于伏笔保存）
+            project_path = manager.project_root if hasattr(manager, 'project_root') else None
+            current_chapter_num = chapter_id
+
             result = await run.io_bound(
                 backend.sync_review_chapter_multi_dimension,
                 paragraphs,
-                context_info
+                context_info,
+                project_path,
+                current_chapter_num
             )
 
             # 3. 显示维度评分
@@ -1543,6 +1643,7 @@ def create_writing_tab():
                     ui_refs['right_tabs'] = right_tabs
                     ui_refs['tab_ctx'] = ui.tab('上下文')
                     ui_refs['tab_rev'] = ui.tab('审稿意见')
+                    tab_foreshadow = ui.tab('伏笔提醒')
 
                 with ui.tab_panels(right_tabs, value=ui_refs.get('tab_ctx')).classes('w-full flex-grow bg-transparent').props('keep-alive animated vertical'):
                     with ui.tab_panel(ui_refs['tab_ctx']).classes('w-full h-full p-0 flex flex-col'):
@@ -1552,3 +1653,9 @@ def create_writing_tab():
                         with ui.scroll_area().classes('w-full flex-grow p-2'):
                             ui_refs['review_panel'] = ui.column().classes('w-full')
                             ui.label("暂无记录").classes('text-grey italic')
+
+                    # 伏笔提醒标签页
+                    with ui.tab_panel(tab_foreshadow).classes('w-full h-full p-0 flex flex-col'):
+                        with ui.scroll_area().classes('w-full flex-grow p-2'):
+                            ui_refs['foreshadow_warning_panel'] = ui.column().classes('w-full')
+                            refresh_foreshadow_warning_ui()

@@ -1225,3 +1225,275 @@ def delete_goal(goal_id):
     goals_service.delete_goal(goal_id)
     ui.notify('已删除', type='info')
     refresh_goals_ui()
+
+
+# ==================== 伏笔追踪管理 ====================
+
+def get_foreshadow_manager():
+    """获取当前项目的伏笔管理器"""
+    from novel_modules.foreshadowing import ForeshadowManager
+    project_path = manager.project_root if hasattr(manager, 'project_root') else None
+    if project_path:
+        return ForeshadowManager(project_path)
+    return None
+
+
+def refresh_foreshadow_ui():
+    """刷新伏笔列表 UI"""
+    container = ui_refs.get('foreshadow_container')
+    if not container:
+        return
+
+    container.clear()
+
+    fs_mgr = get_foreshadow_manager()
+    if not fs_mgr:
+        with container:
+            ui.label('请先加载项目').classes('text-grey-5 italic')
+        return
+
+    # 获取当前章节号用于预警检查
+    current_chapter = app_state.current_chapter_idx + 1 if hasattr(app_state, 'current_chapter_idx') else 0
+    overview = fs_mgr.get_overview(current_chapter)
+
+    with container:
+        # 概览统计卡片
+        with ui.card().classes('w-full p-3 bg-gradient-to-r from-blue-50 to-green-50 mb-4'):
+            with ui.row().classes('w-full justify-around'):
+                # 活跃伏笔
+                with ui.column().classes('items-center'):
+                    ui.label('活跃').classes('text-xs text-grey-6')
+                    ui.label(str(overview['active'])).classes('text-2xl font-bold text-green-600')
+                # 已回收
+                with ui.column().classes('items-center'):
+                    ui.label('已回收').classes('text-xs text-grey-6')
+                    ui.label(str(overview['resolved'])).classes('text-2xl font-bold text-blue-600')
+                # 预警
+                warning_count = overview['warnings_count']
+                warning_color = 'red' if warning_count > 0 else 'grey'
+                with ui.column().classes('items-center'):
+                    ui.label('预警').classes('text-xs text-grey-6')
+                    ui.label(str(warning_count)).classes(f'text-2xl font-bold text-{warning_color}-600')
+
+        # 预警区域
+        warnings = overview.get('warnings', [])
+        if warnings:
+            with ui.expansion(f'⚠️ 预警伏笔 ({len(warnings)}个)', icon='warning').classes('w-full bg-red-50 mb-2'):
+                with ui.column().classes('w-full p-2'):
+                    for w in warnings:
+                        with ui.card().classes('w-full p-2 bg-white mb-1'):
+                            with ui.row().classes('w-full items-center gap-2'):
+                                severity_color = 'red' if w.get('importance') == 'high' else 'orange'
+                                ui.badge(w.get('importance', 'medium'), color=severity_color).props('dense')
+                                ui.label(w['content'][:40]).classes('text-sm font-bold')
+                            ui.label(w.get('warning_message', '')).classes('text-xs text-red-600 mt-1')
+                            ui.label(f"埋设: 第{w['source_chapter']}章 | 已过 {w.get('chapters_since', '?')} 章").classes('text-xs text-grey-5')
+                            with ui.row().classes('w-full justify-end mt-1'):
+                                ui.button('标记回收', on_click=lambda f=w: mark_foreshadow_resolved(f['id'])).props('size=sm flat color=blue')
+                                ui.button('放弃', on_click=lambda f=w: mark_foreshadow_abandoned(f['id'])).props('size=sm flat color=red')
+
+        # 伏笔筛选按钮
+        status_filter = ui_refs.get('foreshadow_status_filter')
+        current_filter = status_filter.text if status_filter else 'active'
+
+        with ui.row().classes('w-full gap-2 mb-2'):
+            for status, label, color in [('active', '活跃', 'green'), ('resolved', '已回收', 'blue'), ('expired', '过期', 'orange'), ('abandoned', '已放弃', 'grey')]:
+                count = overview.get(status, 0)
+                btn_color = color if current_filter == status else 'grey'
+                ui.button(f'{label}({count})',
+                          on_click=lambda s=status: [ui_refs['foreshadow_status_filter'].set_text(s), refresh_foreshadow_ui()]
+                          ).props(f'size=sm color={btn_color}')
+
+        # 伏笔列表
+        foreshadows = fs_mgr.get_foreshadows_by_status(current_filter)
+
+        if not foreshadows:
+            ui.label(f'暂无{current_filter}状态的伏笔').classes('text-grey-5 italic text-center')
+        else:
+            for fs in foreshadows:
+                with ui.card().classes('w-full p-2 mb-1 bg-white'):
+                    with ui.row().classes('w-full items-center gap-2'):
+                        # 类型标签
+                        type_colors = {'物品': 'purple', '人物': 'blue', '剧情': 'green', '悬念': 'orange', '设定': 'grey'}
+                        ui.badge(fs['type'], color=type_colors.get(fs['type'], 'grey')).props('dense')
+
+                        # 重要程度
+                        importance_colors = {'high': 'red', 'medium': 'yellow', 'low': 'grey'}
+                        ui.badge(fs['importance'], color=importance_colors.get(fs['importance'], 'grey')).props('dense')
+
+                        # 内容
+                        ui.label(fs['content'][:50]).classes('text-sm')
+
+                    with ui.row().classes('w-full items-center gap-4 mt-1'):
+                        ui.label(f"📖 埋设: 第{fs['source_chapter']}章").classes('text-xs text-grey-6')
+                        if fs.get('target_chapter'):
+                            ui.label(f"🎯 预期: 第{fs['target_chapter']}章").classes('text-xs text-grey-6')
+                        if fs.get('resolved_chapter'):
+                            ui.label(f"✅ 回收: 第{fs['resolved_chapter']}章").classes('text-xs text-blue-600')
+
+                    if fs.get('notes'):
+                        ui.label(f"📝 {fs['notes'][:30]}").classes('text-xs text-grey-5 mt-1')
+
+                    with ui.row().classes('w-full justify-end mt-1'):
+                        ui.button(icon='edit', on_click=lambda f=fs: open_foreshadow_dialog(f)).props('flat dense size=sm')
+                        ui.button(icon='delete', on_click=lambda f=fs: delete_foreshadow(f['id'])).props('flat dense size=sm color=red')
+
+
+def open_foreshadow_dialog(foreshadow=None):
+    """新建/编辑伏笔对话框"""
+    fs_mgr = get_foreshadow_manager()
+    if not fs_mgr:
+        ui.notify('请先加载项目', type='warning')
+        return
+
+    is_edit = foreshadow is not None
+
+    with ui.dialog() as dialog, ui.card().classes('w-[500px] max-h-[80vh]'):
+        ui.label('编辑伏笔' if is_edit else '新建伏笔').classes('text-h6 mb-4')
+
+        # 基本信息
+        content_input = ui.textarea('伏笔内容', value=foreshadow['content'] if is_edit else '').classes('w-full')
+
+        with ui.row().classes('w-full gap-2'):
+            type_select = ui.select(fs_mgr.TYPES, label='类型', value=foreshadow['type'] if is_edit else '剧情').classes('w-1/2')
+            importance_select = ui.select(['high', 'medium', 'low'], label='重要程度',
+                                          value=foreshadow['importance'] if is_edit else 'medium').classes('w-1/2')
+
+        source_chapter_input = ui.number('埋设章节', value=foreshadow['source_chapter'] if is_edit else app_state.current_chapter_idx + 1, min=1).classes('w-full')
+
+        target_chapter_input = ui.number('预期回收章节', value=foreshadow.get('target_chapter') if is_edit else None, min=1).classes('w-full')
+
+        notes_input = ui.textarea('备注', value=foreshadow.get('notes') if is_edit else '').classes('w-full')
+
+        # 如果是编辑已回收的伏笔，显示回收信息
+        if is_edit and foreshadow.get('status') == 'resolved':
+            with ui.row().classes('w-full gap-2 mt-2'):
+                ui.number('回收章节', value=foreshadow.get('resolved_chapter'), min=1).classes('w-1/2')
+                ui.input('回收方式', value=foreshadow.get('resolved_content', '')).classes('w-1/2')
+
+        async def do_save():
+            if not content_input.value:
+                ui.notify('请输入伏笔内容', type='warning')
+                return
+
+            data = {
+                'content': content_input.value,
+                'foreshadow_type': type_select.value,
+                'source_chapter': int(source_chapter_input.value),
+                'target_chapter': int(target_chapter_input.value) if target_chapter_input.value else None,
+                'importance': importance_select.value,
+                'notes': notes_input.value
+            }
+
+            if is_edit:
+                fs_mgr.update_foreshadow(foreshadow['id'], **data)
+            else:
+                fs_mgr.create_foreshadow(**data)
+
+            ui.notify('已保存', type='positive')
+            dialog.close()
+            refresh_foreshadow_ui()
+
+        with ui.row().classes('w-full justify-end mt-4 gap-2'):
+            ui.button('取消', on_click=dialog.close).props('flat')
+            ui.button('保存', on_click=do_save).props('color=primary')
+
+    dialog.open()
+
+
+def delete_foreshadow(foreshadow_id):
+    """删除伏笔"""
+    fs_mgr = get_foreshadow_manager()
+    if fs_mgr:
+        fs_mgr.delete_foreshadow(foreshadow_id)
+        ui.notify('已删除', type='info')
+        refresh_foreshadow_ui()
+
+
+def mark_foreshadow_resolved(foreshadow_id):
+    """标记伏笔已回收"""
+    fs_mgr = get_foreshadow_manager()
+    if fs_mgr:
+        current_chapter = app_state.current_chapter_idx + 1 if hasattr(app_state, 'current_chapter_idx') else 0
+
+        # 打开确认对话框
+        with ui.dialog() as dialog, ui.card().classes('w-96'):
+            ui.label('确认回收').classes('text-h6 mb-4')
+
+            chapter_input = ui.number('回收章节', value=current_chapter, min=1).classes('w-full')
+            resolution_input = ui.input('回收方式描述（可选）').classes('w-full')
+
+            async def do_resolve():
+                fs_mgr.resolve_foreshadow(
+                    foreshadow_id,
+                    int(chapter_input.value),
+                    resolution_input.value
+                )
+                ui.notify('已标记回收', type='positive')
+                dialog.close()
+                refresh_foreshadow_ui()
+
+            with ui.row().classes('w-full justify-end mt-4 gap-2'):
+                ui.button('取消', on_click=dialog.close).props('flat')
+                ui.button('确认', on_click=do_resolve).props('color=primary')
+
+        dialog.open()
+
+
+def mark_foreshadow_abandoned(foreshadow_id):
+    """标记伏笔已放弃（断头伏笔）"""
+    fs_mgr = get_foreshadow_manager()
+    if fs_mgr:
+        with ui.dialog() as dialog, ui.card().classes('w-96'):
+            ui.label('确认放弃').classes('text-h6 mb-4')
+            ui.label('放弃后此伏笔将不再追踪预警').classes('text-grey-6 mb-4')
+
+            reason_input = ui.input('放弃原因（可选）').classes('w-full')
+
+            async def do_abandon():
+                fs_mgr.mark_abandoned(foreshadow_id, reason_input.value)
+                ui.notify('已放弃', type='info')
+                dialog.close()
+                refresh_foreshadow_ui()
+
+            with ui.row().classes('w-full justify-end mt-4 gap-2'):
+                ui.button('取消', on_click=dialog.close).props('flat')
+                ui.button('确认放弃', on_click=do_abandon).props('color=red')
+
+        dialog.open()
+
+
+def open_foreshadow_settings_dialog():
+    """伏笔追踪配置对话框"""
+    fs_mgr = get_foreshadow_manager()
+    if not fs_mgr:
+        ui.notify('请先加载项目', type='warning')
+        return
+
+    settings = fs_mgr.get_settings()
+
+    with ui.dialog() as dialog, ui.card().classes('w-96'):
+        ui.label('伏笔追踪配置').classes('text-h6 mb-4')
+
+        threshold_input = ui.number('预警阈值（章节数）',
+                                    value=settings.get('warning_chapter_threshold', 10),
+                                    min=1, max=50).classes('w-full')
+
+        auto_detect_switch = ui.switch('审稿时自动检测伏笔',
+                                       value=settings.get('auto_detect_enabled', True))
+
+        async def do_save():
+            fs_mgr.update_settings(
+                warning_chapter_threshold=int(threshold_input.value),
+                auto_detect_enabled=auto_detect_switch.value
+            )
+            ui.notify('已保存', type='positive')
+            dialog.close()
+
+        with ui.row().classes('w-full justify-end mt-4 gap-2'):
+            ui.button('取消', on_click=dialog.close).props('flat')
+            ui.button('保存', on_click=do_save).props('color=primary')
+
+    dialog.open()
+    ui.notify('已删除', type='info')
+    refresh_goals_ui()

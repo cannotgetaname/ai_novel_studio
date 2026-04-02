@@ -89,7 +89,7 @@ class GoalsService:
             start_date = date(today_date.year, today_date.month, 1).isoformat()
             # 计算月末
             if today_date.month == 12:
-                end_date = date(today_date.year + 1, 1, 1).isoformat()
+                end_date = date(today_date.year, 12, 31).isoformat()
             else:
                 next_month = date(today_date.year, today_date.month + 1, 1)
                 end_date = (next_month - timedelta(days=1)).isoformat()
